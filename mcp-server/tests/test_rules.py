@@ -101,3 +101,21 @@ def test_board_display_with_no_moves_has_no_trailer():
     game = Game()
     display = game.board_display()
     assert "手数=" not in display
+
+
+def test_board_svg_initial_position_has_no_lastmove_highlight():
+    game = Game()
+    svg = game.board_svg()
+    assert svg.startswith("<svg")
+    assert "black-pawn" in svg
+    assert "white-pawn" in svg
+    assert "#f6b94d" not in svg  # 直前手ハイライトは未着手なので出ない
+
+
+def test_board_svg_changes_after_move_and_highlights_lastmove():
+    game = Game()
+    before = game.board_svg()
+    game.apply_move("7g7f")
+    after = game.board_svg()
+    assert after != before
+    assert "#f6b94d" in after  # 直前手のマスがハイライトされる

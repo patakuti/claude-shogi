@@ -12,6 +12,24 @@ argument-hint: [difficulty 1-5] [user_side black|white]
 
 確認後、`new_game(difficulty, user_side, mode="auto")` を呼ぶ。
 
+## GUI盤面の自動更新
+
+ツールの戻り値に含まれる `board_svg` を使い、`apply_move()` / `engine_move()` を呼ぶたび
+(ユーザー側・コンピュータ側どちらも)にGUI盤面を更新する。
+
+1. `new_game`直後、`board_svg`を次のHTMLに埋め込み、スクラッチパッドディレクトリへ書き出す。
+   ```html
+   <div style="display:flex;justify-content:center;padding:16px;">
+   {{board_svg}}
+   </div>
+   <script>setInterval(() => location.reload(), 2000)</script>
+   ```
+   `Artifact`ツールでこのファイルを公開する(`favicon`は`♟️`、`title`は「将棋対局」)。
+   公開したURLをユーザーに一度だけ伝える。
+2. 以降、`apply_move()` / `engine_move()` の戻り値に含まれる新しい`board_svg`で同じHTMLファイルを
+   上書きし、**同じ`file_path`**で`Artifact`を再度呼んで同一URLへ再デプロイする(会話での報告が
+   ない手でもGUI更新だけは毎手行う)。
+
 ## 対局の進め方
 
 対局が終了する(`status`が`"playing"`以外になる)まで、以下を繰り返す。
