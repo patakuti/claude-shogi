@@ -276,8 +276,10 @@ def load_kif(path: str) -> dict:
     """保存済みのKIFファイルを読み込み、対局を再開する。"""
     global _session
     kif_path = Path(path)
-    if not kif_path.is_absolute():
-        kif_path = GAMES_DIR / kif_path
+    if not kif_path.is_absolute() and not kif_path.exists():
+        # `ls games/*.kif`等が返す"games/"付きの相対パスと、
+        # ファイル名だけの指定(GAMES_DIR基準)の両方を許容する。
+        kif_path = GAMES_DIR / kif_path.name
 
     try:
         loaded = kif_store.KifStore.load(kif_path)

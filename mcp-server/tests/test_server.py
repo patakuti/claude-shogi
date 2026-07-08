@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -119,6 +120,20 @@ def test_save_kif_and_load_kif_round_trip(tmp_path):
     assert load_result["mode"] == "discuss"
     assert load_result["move_number"] == 3
     assert load_result["turn"] == "black"
+
+
+def test_load_kif_accepts_relative_path_that_already_includes_directory():
+    # 実際にls -t games/*.kifで自動保存先を探すと、GAMES_DIRのプレフィックスを
+    # 含んだ相対パス(例: "games/xxx.kif")が返る。これをそのままGAMES_DIRへ
+    # 連結すると"games/games/xxx.kif"のような二重パスになってしまう不具合があった。
+    result = server.new_game(difficulty=1, user_side="black")
+    kif_path = Path(result["kif_path"])
+    server._session.close()
+    server._session = None
+
+    relative = os.path.relpath(kif_path, Path.cwd())
+    load_result = server.load_kif(relative)
+    assert load_result["ok"], load_result
 
 
 def test_load_kif_restores_resigned_game(tmp_path):
