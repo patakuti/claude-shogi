@@ -76,6 +76,11 @@ class Game:
             lines.append(f"手数={self.move_number() - 1}  {mover_mark}{last.kif} まで")
         return "\n".join(lines)
 
+    def board_svg(self, scale: float = 2.0) -> str:
+        """GUI表示用のSVG文字列。駒配置・成駒表記・直前手ハイライトはcshogiに委譲する。"""
+        lastmove = self.board.peek() if self.move_number() > 1 else None
+        return str(self.board.to_svg(lastmove=lastmove, scale=scale))
+
     def status(self) -> str:
         if self.board.is_nyugyoku():
             return STATUS_NYUGYOKU

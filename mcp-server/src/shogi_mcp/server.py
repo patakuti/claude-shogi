@@ -92,6 +92,7 @@ def _state_dict(session: SessionState) -> dict:
         "ok": True,
         "sfen": game.sfen(),
         "board": game.board_display(),
+        "board_svg": game.board_svg(),
         "turn": game.turn(),
         "move_number": game.move_number(),
         "legal_moves": [_move_info(m) for m in game.legal_moves()],

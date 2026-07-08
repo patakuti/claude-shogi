@@ -40,6 +40,10 @@ scripts/setup_engine.sh
 提供するツール: `new_game` / `get_state` / `apply_move` / `engine_move` / `engine_hint` /
 `save_kif` / `load_kif` / `resign`(詳細は`02_design.md` §3)。
 
+`new_game` / `get_state` / `apply_move` / `engine_move` / `load_kif` / `resign` の戻り値には
+GUI表示用のSVG文字列(`board_svg`)も含まれる。各スラッシュコマンドはこれを使い、一手指すたびに
+`Artifact`ツールで同じURLへ盤面を再デプロイする(ブラウザタブは自動更新される)。
+
 対局は1手ごとに`games/YYYY-MM-DD_HHMMSS.kif`へ自動保存され、`load_kif`で再開できる。
 
 手動での動作確認:
