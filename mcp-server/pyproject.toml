@@ -1,0 +1,21 @@
+[project]
+name = "shogi-mcp"
+version = "0.1.0"
+description = "MCP server for playing shogi against a USI engine"
+requires-python = ">=3.12"
+dependencies = [
+    "cshogi>=1.0.2",
+    "mcp>=1.28.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/shogi_mcp"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
