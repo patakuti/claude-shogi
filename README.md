@@ -57,7 +57,32 @@ uv run pytest tests/ -v
 
 ## 使い方
 
-(実装中。フェーズ5完了後にスラッシュコマンドの使い方を記載予定)
+Claude Code上で以下のスラッシュコマンドを使う。難易度(1〜5)と手番(black/white)は
+引数で指定できる(例: `/shogi-auto 3 black`)。省略した場合は対局開始前に確認される。
+
+| コマンド | モード |
+|---|---|
+| `/shogi-auto [difficulty] [user_side]` | 自動モード。Claudeが会話を挟まずユーザー側の手も自動で決めて指す。終局や山場のみ報告。 |
+| `/shogi-discuss [difficulty] [user_side]` | Claude対話モード。1手ごとに「こう指そうと思う、理由は〜」と提案してから指す。 |
+| `/shogi-user [difficulty] [user_side]` | ユーザー対話モード。「7六歩」のような自然言語の指示を指し手に変換して指す。 |
+| `/shogi-resume [KIFパス]` | 保存済みの対局を再開する。パス省略時は`games/`内の最新KIFを使う。 |
+
+### 難易度
+
+| Lv | 想定 | 設定 |
+|---|---|---|
+| 1 | 入門 | NodesLimit=1000, byoyomi 100ms |
+| 2 | 初級 | NodesLimit=10000, byoyomi 300ms |
+| 3 | 中級 | NodesLimit=100000, byoyomi 1000ms |
+| 4 | 上級 | NodesLimit無制限, byoyomi 2000ms |
+| 5 | 最強 | NodesLimit無制限, byoyomi 5000ms, Threads 8 |
+
+体感の強さに応じて`mcp-server/src/shogi_mcp/presets.py`のノード数を調整できる。
+
+### 対局の再開
+
+対局は1手ごとに`games/YYYY-MM-DD_HHMMSS.kif`へ自動保存される。Claude Codeのセッションが
+途切れても、`/shogi-resume`で直前の局面・難易度・手番・モードから対局を再開できる。
 
 ## ライセンス
 
