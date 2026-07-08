@@ -1,0 +1,21 @@
+# 要件定義・設計・計画・プロジェクト規約(Git管理外)
+/01_requirements.md
+/02_design.md
+/03_plan.md
+/CLAUDE.md
+
+# 将棋エンジン(バイナリ・評価関数)
+/engine/
+
+# 対局ログ
+/games/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# OS
+.DS_Store
