@@ -14,7 +14,29 @@ Claude Code上で、将棋エンジン(やねうら王)を相手に対局でき�
 
 ## セットアップ
 
-(実装中。フェーズ1完了後にエンジンのセットアップ手順を記載予定)
+### 前提パッケージ
+
+```bash
+sudo apt install build-essential git p7zip-full wget
+```
+
+### 将棋エンジンのビルド
+
+```bash
+scripts/setup_engine.sh
+```
+
+以下を生成する(いずれもGit管理外・`.gitignore`対象):
+
+- `engine/YaneuraOu-by-gcc` … やねうら王本体(ソースからビルド、`TARGET_CPU=ZEN3`)
+- `engine/eval/nn.bin` … NNUE評価関数「Háo」(tanuki-チーム配布, GPLv3。
+  同ディレクトリに`LICENSE-eval-gpl-3.0.txt`を同梱)
+
+スクリプト最後にUSI疎通確認(`usi`→`isready`→`go byoyomi`→`bestmove`)を自動実行する。
+
+### MCPサーバー
+
+(実装中。フェーズ4完了後に記載予定)
 
 ## 使い方
 
@@ -22,4 +44,6 @@ Claude Code上で、将棋エンジン(やねうら王)を相手に対局でき�
 
 ## ライセンス
 
-TBD
+本リポジトリのコードのライセンスはTBD。
+同梱の評価関数(`engine/eval/nn.bin`)はtanuki-チームによる配布物でGPLv3
+(`engine/eval/LICENSE-eval-gpl-3.0.txt`参照)。やねうら王本体もGPLv3。
