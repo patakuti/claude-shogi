@@ -36,7 +36,24 @@ scripts/setup_engine.sh
 
 ### MCPサーバー
 
-(実装中。フェーズ4完了後に記載予定)
+`.mcp.json`にサーバー`shogi`として登録済み(Claude Codeが自動で`uv run --project mcp-server shogi-mcp`を起動する)。
+提供するツール: `new_game` / `get_state` / `apply_move` / `engine_move` / `engine_hint` /
+`save_kif` / `load_kif` / `resign`(詳細は`02_design.md` §3)。
+
+対局は1手ごとに`games/YYYY-MM-DD_HHMMSS.kif`へ自動保存され、`load_kif`で再開できる。
+
+手動での動作確認:
+
+```bash
+cd mcp-server
+uv run pytest tests/ -v
+```
+
+### テスト
+
+`mcp-server/tests/`にpytestを配置している。`test_usi_engine.py` / `test_server.py`は
+`engine/YaneuraOu-by-gcc`のビルド(`scripts/setup_engine.sh`実行)を前提とし、未ビルドの場合は
+自動的にスキップされる。
 
 ## 使い方
 
