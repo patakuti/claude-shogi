@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Optional
 
 import cshogi
 from mcp.server.fastmcp import FastMCP
 
-from . import kif_store, presets, rules
+from . import gui_server, kif_store, presets, rules
 from .usi_engine import UsiEngine, UsiEngineError, UsiTimeoutError
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -75,10 +76,41 @@ class SessionState:
 
 
 _session: Optional[SessionState] = None
+# MCPツール呼び出し(asyncioイベントループ側)とgui_serverのHTTPハンドラ(別スレッド)の
+# 両方が_sessionと中のcshogi.Boardを読み書きするため、盤面を変更する箇所と
+# GUI用フラグメント生成の両方でこのロックを取得する(02_design.md §7.1)。
+_session_lock = threading.Lock()
 
 
 def _current_session() -> Optional[SessionState]:
     return _session
+
+
+_STATUS_LABELS = {
+    rules.STATUS_CHECKMATE: "詰み",
+    rules.STATUS_DRAW_REPETITION: "千日手",
+    rules.STATUS_NYUGYOKU: "入玉宣言勝ち",
+    "resigned": "投了",
+}
+
+
+def _board_fragment() -> str:
+    """gui_serverの`GET /board`が返すHTMLフラグメント(SVG + 手数/手番/終局状態)。"""
+    with _session_lock:
+        session = _session
+        if session is None:
+            return gui_server.NO_GAME_FRAGMENT
+        svg = session.game.board_svg()
+        last_line = session.game.last_move_line()
+        status = session.status()
+
+    parts = [svg]
+    if last_line is not None:
+        parts.append(f"<p>{last_line}</p>")
+    label = _STATUS_LABELS.get(status)
+    if label is not None:
+        parts.append(f"<p><strong>{label}</strong></p>")
+    return "\n".join(parts)
 
 
 def _move_info(m: rules.MoveInfo) -> dict:
@@ -130,22 +162,23 @@ def new_game(difficulty: int = presets.DEFAULT_LEVEL, user_side: str = "black", 
     if mode not in ("auto", "discuss", "user"):
         return {"ok": False, "error": "invalid_mode"}
 
-    if _session is not None:
-        _session.close()
-
-    _session = SessionState(difficulty=difficulty, user_side=user_side, mode=mode)
-    result = _state_dict(_session)
-    result["kif_path"] = str(_session.kif_store.path)
+    with _session_lock:
+        if _session is not None:
+            _session.close()
+        _session = SessionState(difficulty=difficulty, user_side=user_side, mode=mode)
+        result = _state_dict(_session)
+        result["kif_path"] = str(_session.kif_store.path)
     return result
 
 
 @mcp.tool()
 def get_state() -> dict:
     """現在の対局状態(SFEN・盤面表示・合法手一覧・終局判定)を返す。"""
-    session = _current_session()
-    if session is None:
-        return {"ok": False, "error": "no_active_game"}
-    return _state_dict(session)
+    with _session_lock:
+        session = _current_session()
+        if session is None:
+            return {"ok": False, "error": "no_active_game"}
+        return _state_dict(session)
 
 
 @mcp.tool()
@@ -157,15 +190,16 @@ def apply_move(move: str) -> dict:
     if session.is_game_over():
         return {"ok": False, "error": "game_already_over"}
 
-    result = session.game.apply_move(move)
-    if not result.ok:
-        return {
-            "ok": False,
-            "error": result.error,
-            "candidates": [_move_info(m) for m in (result.candidates or [])],
-        }
-    session.autosave()
-    return _state_dict(session)
+    with _session_lock:
+        result = session.game.apply_move(move)
+        if not result.ok:
+            return {
+                "ok": False,
+                "error": result.error,
+                "candidates": [_move_info(m) for m in (result.candidates or [])],
+            }
+        session.autosave()
+        return _state_dict(session)
 
 
 @mcp.tool()
@@ -195,28 +229,29 @@ def engine_move(byoyomi_ms: int = 0) -> dict:
     except (UsiTimeoutError, UsiEngineError) as e:
         return {"ok": False, "error": f"engine_unavailable: {e}"}
 
-    if think.bestmove == "resign":
-        result = _state_dict(session)
-        result["status"] = "engine_resigned"
-        return result
-    if think.bestmove == "win":
-        result = _state_dict(session)
-        result["status"] = "engine_win_nyugyoku"
-        return result
+    with _session_lock:
+        if think.bestmove == "resign":
+            result = _state_dict(session)
+            result["status"] = "engine_resigned"
+            return result
+        if think.bestmove == "win":
+            result = _state_dict(session)
+            result["status"] = "engine_win_nyugyoku"
+            return result
 
-    apply_result = session.game.apply_move(think.bestmove)
-    if not apply_result.ok:
-        return {"ok": False, "error": "engine_returned_illegal_move", "bestmove": think.bestmove}
+        apply_result = session.game.apply_move(think.bestmove)
+        if not apply_result.ok:
+            return {"ok": False, "error": "engine_returned_illegal_move", "bestmove": think.bestmove}
 
-    session.autosave()
-    result = _state_dict(session)
-    primary = think.primary
-    result["think"] = {
-        "score_cp": primary.score_cp if primary else None,
-        "score_mate": primary.score_mate if primary else None,
-        "pv": primary.pv if primary else [],
-    }
-    return result
+        session.autosave()
+        result = _state_dict(session)
+        primary = think.primary
+        result["think"] = {
+            "score_cp": primary.score_cp if primary else None,
+            "score_mate": primary.score_mate if primary else None,
+            "pv": primary.pv if primary else [],
+        }
+        return result
 
 
 @mcp.tool()
@@ -260,16 +295,17 @@ def save_kif(path: str = "") -> dict:
     if session is None:
         return {"ok": False, "error": "no_active_game"}
 
-    moves = list(session.game.board.history)
-    if path:
-        target = kif_store.KifStore(GAMES_DIR)
-        target.path = Path(path)
-        target.meta = kif_store.GameMeta(session.difficulty, session.user_side, session.mode)
-        target.save(moves, resigned=session.resigned)
-        return {"ok": True, "path": str(target.path)}
+    with _session_lock:
+        moves = list(session.game.board.history)
+        if path:
+            target = kif_store.KifStore(GAMES_DIR)
+            target.path = Path(path)
+            target.meta = kif_store.GameMeta(session.difficulty, session.user_side, session.mode)
+            target.save(moves, resigned=session.resigned)
+            return {"ok": True, "path": str(target.path)}
 
-    session.autosave()
-    return {"ok": True, "path": str(session.kif_store.path)}
+        session.autosave()
+        return {"ok": True, "path": str(session.kif_store.path)}
 
 
 @mcp.tool()
@@ -287,26 +323,27 @@ def load_kif(path: str) -> dict:
     except Exception as e:
         return {"ok": False, "error": f"failed_to_load_kif: {e}"}
 
-    if _session is not None:
-        _session.close()
+    with _session_lock:
+        if _session is not None:
+            _session.close()
 
-    new_session = SessionState(
-        difficulty=loaded.meta.difficulty,
-        user_side=loaded.meta.user_side,
-        mode=loaded.meta.mode,
-        kif_path=kif_path,
-    )
-    for move_int in loaded.moves:
-        result = new_session.game.apply_move(cshogi.move_to_usi(move_int))
-        if not result.ok:
-            new_session.close()
-            return {"ok": False, "error": f"kif_contains_illegal_move: {cshogi.move_to_usi(move_int)}"}
-    new_session.resigned = loaded.resigned
+        new_session = SessionState(
+            difficulty=loaded.meta.difficulty,
+            user_side=loaded.meta.user_side,
+            mode=loaded.meta.mode,
+            kif_path=kif_path,
+        )
+        for move_int in loaded.moves:
+            result = new_session.game.apply_move(cshogi.move_to_usi(move_int))
+            if not result.ok:
+                new_session.close()
+                return {"ok": False, "error": f"kif_contains_illegal_move: {cshogi.move_to_usi(move_int)}"}
+        new_session.resigned = loaded.resigned
 
-    _session = new_session
-    result = _state_dict(_session)
-    result["kif_path"] = str(_session.kif_store.path)
-    return result
+        _session = new_session
+        result = _state_dict(_session)
+        result["kif_path"] = str(_session.kif_store.path)
+        return result
 
 
 @mcp.tool()
@@ -318,12 +355,14 @@ def resign() -> dict:
     if session.is_game_over():
         return {"ok": False, "error": "game_already_over"}
 
-    session.resigned = True
-    session.autosave()
-    return _state_dict(session)
+    with _session_lock:
+        session.resigned = True
+        session.autosave()
+        return _state_dict(session)
 
 
 def main() -> None:
+    gui_server.start(_board_fragment)
     mcp.run()
 
 

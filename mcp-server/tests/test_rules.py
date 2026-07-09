@@ -103,6 +103,13 @@ def test_board_display_with_no_moves_has_no_trailer():
     assert "手数=" not in display
 
 
+def test_last_move_line_matches_board_display_trailer():
+    game = Game()
+    assert game.last_move_line() is None
+    game.apply_move("7g7f")
+    assert game.last_move_line() == "手数=1  ▲７六歩(77) まで"
+
+
 def test_board_svg_initial_position_has_no_lastmove_highlight():
     game = Game()
     svg = game.board_svg()
