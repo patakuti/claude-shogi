@@ -14,21 +14,11 @@ argument-hint: [difficulty 1-5] [user_side black|white]
 
 ## GUI盤面の自動更新
 
-ツールの戻り値に含まれる `board_svg` を使い、`apply_move()` / `engine_move()` を呼ぶたび
-(ユーザー側・コンピュータ側どちらも)にGUI盤面を更新する。
-
-1. `new_game`直後、`board_svg`を次のHTMLに埋め込み、スクラッチパッドディレクトリへ書き出す。
-   ```html
-   <div style="display:flex;justify-content:center;padding:16px;">
-   {{board_svg}}
-   </div>
-   <script>setInterval(() => location.reload(), 2000)</script>
-   ```
-   `Artifact`ツールでこのファイルを公開する(`favicon`は`♟️`、`title`は「将棋対局」)。
-   公開したURLをユーザーに一度だけ伝える。
-2. 以降、`apply_move()` / `engine_move()` の戻り値に含まれる新しい`board_svg`で同じHTMLファイルを
-   上書きし、**同じ`file_path`**で`Artifact`を再度呼んで同一URLへ再デプロイする(会話での報告が
-   ない手でもGUI更新だけは毎手行う)。
+`new_game`直後、`http://localhost:8765/` をユーザーに一度だけ伝える。MCPサーバー起動時に
+GUIサーバーが常時待受しており、ブラウザでこのURLを開いたままにしておけば
+`apply_move()` / `engine_move()`(ユーザー側・コンピュータ側どちらも)のたびに1秒間隔の
+ポーリングで盤面が自動更新されるため、Claude側でファイルを書き出したり再デプロイしたり
+する操作は不要。
 
 ## 対局の進め方
 

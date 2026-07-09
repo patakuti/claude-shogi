@@ -67,13 +67,20 @@ class Game:
         prev_move = history[-2] if len(history) >= 2 else None
         return MoveInfo(usi=cshogi.move_to_usi(move), kif=KIF.move_to_kif(move, prev_move))
 
+    def last_move_line(self) -> Optional[str]:
+        """「手数=N ▲/△xxx まで」の1行。テキスト盤面・GUI盤面の両方で使う(§5, §7.1)。"""
+        last = self.last_move()
+        if last is None:
+            return None
+        # 直前に指したのは now手番の相手側。次数=現在の手数-1が直前手の着手番号。
+        mover_mark = "▲" if self.board.turn == cshogi.WHITE else "△"
+        return f"手数={self.move_number() - 1}  {mover_mark}{last.kif} まで"
+
     def board_display(self) -> str:
         lines = [KIF.board_to_bod(self.board)]
-        last = self.last_move()
-        if last is not None:
-            # 直前に指したのは now手番の相手側。次数=現在の手数-1が直前手の着手番号。
-            mover_mark = "▲" if self.board.turn == cshogi.WHITE else "△"
-            lines.append(f"手数={self.move_number() - 1}  {mover_mark}{last.kif} まで")
+        line = self.last_move_line()
+        if line is not None:
+            lines.append(line)
         return "\n".join(lines)
 
     def board_svg(self, scale: float = 2.0) -> str:

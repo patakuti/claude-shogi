@@ -136,6 +136,23 @@ def test_load_kif_accepts_relative_path_that_already_includes_directory():
     assert load_result["ok"], load_result
 
 
+def test_board_fragment_without_active_game():
+    from shogi_mcp import gui_server
+
+    assert server._board_fragment() == gui_server.NO_GAME_FRAGMENT
+
+
+def test_board_fragment_reflects_current_state():
+    server.new_game(difficulty=1, user_side="black")
+    fragment = server._board_fragment()
+    assert "<svg" in fragment
+    assert "手数=" not in fragment  # 初期局面はまだ着手なし
+
+    server.apply_move("7g7f")
+    fragment_after = server._board_fragment()
+    assert "手数=1" in fragment_after
+
+
 def test_load_kif_restores_resigned_game(tmp_path):
     server.new_game(difficulty=1, user_side="black")
     server.apply_move("7g7f")

@@ -40,9 +40,9 @@ scripts/setup_engine.sh
 提供するツール: `new_game` / `get_state` / `apply_move` / `engine_move` / `engine_hint` /
 `save_kif` / `load_kif` / `resign`(詳細は`02_design.md` §3)。
 
-`new_game` / `get_state` / `apply_move` / `engine_move` / `load_kif` / `resign` の戻り値には
-GUI表示用のSVG文字列(`board_svg`)も含まれる。各スラッシュコマンドはこれを使い、一手指すたびに
-`Artifact`ツールで同じURLへ盤面を再デプロイする(ブラウザタブは自動更新される)。
+MCPサーバー起動時、`http://localhost:8765/` でGUI盤面(SVG)を配信するHTTPサーバーも
+常時待受する(標準ライブラリの`http.server`のみで実装、追加の外部依存なし)。ブラウザで
+このURLを開いておけば、1秒間隔のポーリングで一手ごとに盤面が自動更新される。
 
 対局は1手ごとに`games/YYYY-MM-DD_HHMMSS.kif`へ自動保存され、`load_kif`で再開できる。
 
