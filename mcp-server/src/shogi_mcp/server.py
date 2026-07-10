@@ -488,7 +488,7 @@ def resign() -> dict:
 
 
 def main() -> None:
-    gui_server.start(_board_fragment)
+    gui_server.start(_board_fragment, games_dir=GAMES_DIR)
     mcp.run()
 
 
