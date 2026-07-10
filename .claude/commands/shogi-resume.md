@@ -22,3 +22,5 @@ argument-hint: [KIFファイルパス(省略時はgames/内の最新ファイル
    - `mode` が `"auto"` → `/shogi-auto` と同じ進め方(会話を挟まず自動で進める)
    - `mode` が `"discuss"` → `/shogi-discuss` と同じ進め方(一手ごとに提案してから指す)
    - `mode` が `"user"` → `/shogi-user` と同じ進め方(ユーザーの自然言語指示を待つ)
+   - `mode` が `"brain"` → `/shogi-brain` と同じ進め方(エンジンのヒントなしでClaude自身が
+     考えて指す。`engine_hint`は呼ばず、`analyze_position` / `verify_moves` / `simulate_line`を使う)

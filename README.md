@@ -5,8 +5,8 @@ Claude Code上で、将棋エンジン(やねうら王)を相手に対局でき�
 ## 概要
 
 - 対局相手は常にコンピュータ(USIプロトコル対応の将棋エンジン)。
-- ユーザー側の手をどう決めるかを、対局開始時に3つのモードから選択できる。
-  - 自動モード / Claude対話モード / ユーザー対話モード
+- ユーザー側の手をどう決めるかを、対局開始時に4つのモードから選択できる。
+  - 自動モード / Claude対話モード / ユーザー対話モード / Claude思考モード
 - ルールの正しさ(合法手判定・詰み・千日手・入玉宣言勝ち等)はcshogiに委譲し、
   対局の強さはやねうら王(NNUE)が担当する。
 
@@ -38,7 +38,9 @@ scripts/setup_engine.sh
 
 `.mcp.json`にサーバー`shogi`として登録済み(Claude Codeが自動で`uv run --project mcp-server shogi-mcp`を起動する)。
 提供するツール: `new_game` / `get_state` / `apply_move` / `engine_move` / `engine_hint` /
-`save_kif` / `load_kif` / `resign`(詳細は`02_design.md` §3)。
+`save_kif` / `load_kif` / `resign`(詳細は`02_design.md` §3)、およびClaude思考モード用の
+解析ツール `analyze_position` / `verify_moves` / `simulate_line`(同§11。エンジン不使用の
+cshogiベース自前実装で、詰み探索・頓死チェック・浅い駒得探索・読み筋の検証を行う)。
 
 MCPサーバー起動時、`http://localhost:8765/` でGUI盤面(SVG)を配信するHTTPサーバーも
 常時待受する(標準ライブラリの`http.server`のみで実装、追加の外部依存なし)。ブラウザで
@@ -69,6 +71,7 @@ Claude Code上で以下のスラッシュコマンドを使う。難易度(1〜5
 | `/shogi-auto [difficulty] [user_side]` | 自動モード。Claudeが会話を挟まずユーザー側の手も自動で決めて指す。終局や山場のみ報告。 |
 | `/shogi-discuss [difficulty] [user_side]` | Claude対話モード。1手ごとに「こう指そうと思う、理由は〜」と提案してから指す。 |
 | `/shogi-user [difficulty] [user_side]` | ユーザー対話モード。「7六歩」のような自然言語の指示を指し手に変換して指す。 |
+| `/shogi-brain [difficulty] [user_side]` | Claude思考モード。エンジンのヒントを使わず、Claude自身が解析ツール(詰み探索・候補手検証・読み筋シミュレータ)を頼りに考えて指す。 |
 | `/shogi-resume [KIFパス]` | 保存済みの対局を再開する。パス省略時は`games/`内の最新KIFを使う。 |
 
 ### 難易度
