@@ -35,6 +35,8 @@ class SessionState:
         self.user_side = user_side
         self.mode = mode
         self.resigned = False
+        # 手数(1始まり)→その手に付けるKIFコメント行(エンジン評価値・Claudeコメント、02_design.md §12)
+        self.comments: dict[int, list[str]] = {}
 
         self.engine = UsiEngine(
             str(ENGINE_PATH),
@@ -67,9 +69,16 @@ class SessionState:
     def is_game_over(self) -> bool:
         return self.resigned or self.game.is_game_over()
 
+    def add_comment_lines(self, move_number: int, lines: list[str]) -> None:
+        self.comments.setdefault(move_number, []).extend(lines)
+
+    def last_move_number(self) -> int:
+        """直前に指された手の手数(1始まり)。まだ1手も指されていなければ0。"""
+        return len(self.game.board.history)
+
     def autosave(self) -> None:
         moves = list(self.game.board.history)
-        self.kif_store.save(moves, resigned=self.resigned)
+        self.kif_store.save(moves, resigned=self.resigned, comments=self.comments)
 
     def close(self) -> None:
         self.engine.quit()
@@ -136,6 +145,27 @@ def _state_dict(session: SessionState) -> dict:
     }
 
 
+def _eval_comment_line(primary, mover: str) -> Optional[str]:
+    """engine_moveの思考結果からKIFコメント用の評価値行を作る(02_design.md §12.2)。
+
+    エンジンの評価値は手番側(=mover)視点なので、先手有利=正へ符号を正規化する。
+    pvは肥大化を防ぐため先頭6手まで。評価値が無ければNone。
+    """
+    if primary is None:
+        return None
+    sign = 1 if mover == "black" else -1
+    if primary.score_mate is not None:
+        eval_part = f"mate:{sign * primary.score_mate}"
+    elif primary.score_cp is not None:
+        eval_part = f"cp:{sign * primary.score_cp}"
+    else:
+        return None
+    line = f"eval {eval_part}"
+    if primary.pv:
+        line += " pv:" + " ".join(primary.pv[:6])
+    return line
+
+
 def _think_with_recovery(session: SessionState, **go_kwargs):
     """思考中にエンジンが応答しない/落ちた場合、1回だけ再起動して再試行する。"""
     try:
@@ -181,8 +211,12 @@ def get_state() -> dict:
 
 
 @mcp.tool()
-def apply_move(move: str) -> dict:
-    """指し手(USI表記, 例: 7g7f / P*5e / 2b3a+)を適用する。ユーザー側・Claude側共通で使う。"""
+def apply_move(move: str, comment: str = "") -> dict:
+    """指し手(USI表記, 例: 7g7f / P*5e / 2b3a+)を適用する。ユーザー側・Claude側共通で使う。
+
+    commentが非空なら、この手へのコメント(狙い・読みなど)としてKIFに記録する
+    (KIF標準の`*`コメント行。振り返り再生 http://localhost:8765/replay で表示される)。
+    """
     session = _current_session()
     if session is None:
         return {"ok": False, "error": "no_active_game"}
@@ -197,6 +231,8 @@ def apply_move(move: str) -> dict:
                 "error": result.error,
                 "candidates": [_move_info(m) for m in (result.candidates or [])],
             }
+        if comment:
+            session.add_comment_lines(session.last_move_number(), [comment])
         session.autosave()
         return _state_dict(session)
 
@@ -238,10 +274,14 @@ def engine_move(byoyomi_ms: int = 0) -> dict:
             result["status"] = "engine_win_nyugyoku"
             return result
 
+        mover = session.game.turn()  # 適用前の手番=エンジン側(評価値の符号正規化に使う)
         apply_result = session.game.apply_move(think.bestmove)
         if not apply_result.ok:
             return {"ok": False, "error": "engine_returned_illegal_move", "bestmove": think.bestmove}
 
+        eval_line = _eval_comment_line(think.primary, mover)
+        if eval_line is not None:
+            session.add_comment_lines(session.last_move_number(), [eval_line])
         session.autosave()
         result = _state_dict(session)
         primary = think.primary
@@ -349,6 +389,30 @@ def simulate_line(moves: list[str]) -> dict:
 
 
 @mcp.tool()
+def add_comment(text: str) -> dict:
+    """直前に指された手にコメントを追記する(KIF標準の`*`コメント行として記録)。
+
+    用途: 相手の手への所感、終局時の総括など、着手時点では書けないコメント。
+    自分の着手と同時に書くコメントは`apply_move`の`comment`引数を使う。
+    終局後でも呼べる(総括用)。まだ1手も指されていない場合はエラー。
+    """
+    session = _current_session()
+    if session is None:
+        return {"ok": False, "error": "no_active_game"}
+    if not text.strip():
+        return {"ok": False, "error": "empty_comment"}
+
+    with _session_lock:
+        move_number = session.last_move_number()
+        if move_number == 0:
+            return {"ok": False, "error": "no_move_to_comment"}
+        session.add_comment_lines(move_number, [text])
+        session.autosave()
+        last = session.game.last_move()
+        return {"ok": True, "move_number": move_number, "move": _move_info(last) if last else None}
+
+
+@mcp.tool()
 def save_kif(path: str = "") -> dict:
     """現在の対局をKIF形式で保存する。pathを省略すると自動保存先に上書き保存する。"""
     session = _current_session()
@@ -361,7 +425,7 @@ def save_kif(path: str = "") -> dict:
             target = kif_store.KifStore(GAMES_DIR)
             target.path = Path(path)
             target.meta = kif_store.GameMeta(session.difficulty, session.user_side, session.mode)
-            target.save(moves, resigned=session.resigned)
+            target.save(moves, resigned=session.resigned, comments=session.comments)
             return {"ok": True, "path": str(target.path)}
 
         session.autosave()
@@ -399,6 +463,8 @@ def load_kif(path: str) -> dict:
                 new_session.close()
                 return {"ok": False, "error": f"kif_contains_illegal_move: {cshogi.move_to_usi(move_int)}"}
         new_session.resigned = loaded.resigned
+        # コメントを復元しないと、再開後の自動保存(全体書き直し)で既存コメントが消える
+        new_session.comments = {k: list(v) for k, v in loaded.comments.items()}
 
         _session = new_session
         result = _state_dict(_session)
@@ -422,7 +488,7 @@ def resign() -> dict:
 
 
 def main() -> None:
-    gui_server.start(_board_fragment)
+    gui_server.start(_board_fragment, games_dir=GAMES_DIR)
     mcp.run()
 
 
