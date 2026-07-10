@@ -43,6 +43,8 @@ argument-hint: [difficulty 1-5] [user_side black|white]
    (盤面・材料点変化・王手の有無)を確認する。脳内で盤面を進めない(ズレるため)。
 5. 決めた手を `apply_move()` で指す。非合法と返されたら、盤面をよく見直して
    `verify_moves` で確認してから指し直す。
+6. 王手をかけられた局面などで、全候補(全合法手)に`allows_mate`が付き受けが存在しない
+   場合は、粘らずに `resign()` で投了する(将棋の作法に従う)。
 
 USI表記とKIF表記の対応は `get_state()` の `legal_moves`(usi/kifペア)を参照する。
 
