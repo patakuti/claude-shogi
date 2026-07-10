@@ -9,7 +9,7 @@ from typing import Optional
 import cshogi
 from mcp.server.fastmcp import FastMCP
 
-from . import gui_server, kif_store, presets, rules
+from . import analysis, gui_server, kif_store, presets, rules
 from .usi_engine import UsiEngine, UsiEngineError, UsiTimeoutError
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -159,7 +159,7 @@ def new_game(difficulty: int = presets.DEFAULT_LEVEL, user_side: str = "black", 
         presets.get(difficulty)
     except ValueError as e:
         return {"ok": False, "error": str(e)}
-    if mode not in ("auto", "discuss", "user"):
+    if mode not in ("auto", "discuss", "user", "brain"):
         return {"ok": False, "error": "invalid_mode"}
 
     with _session_lock:
@@ -286,6 +286,67 @@ def engine_hint(multipv: int = 3, byoyomi_ms: int = 1000) -> dict:
             }
         )
     return {"ok": True, "candidates": candidates}
+
+
+def _board_snapshot() -> Optional[cshogi.Board]:
+    """解析ツール用に現局面のコピーを取る。解析中に_session_lockを握り続けないための分離。"""
+    with _session_lock:
+        session = _current_session()
+        if session is None:
+            return None
+        return cshogi.Board(session.game.sfen())
+
+
+@mcp.tool()
+def analyze_position() -> dict:
+    """局面の構造化要約を返す(盤面は変更しない)。Claude思考モード(/shogi-brain)用。
+
+    駒割り(material)・持ち駒(hands)・手番側から相手玉への詰み(mate_for_side_to_move)・
+    手番側が放置した場合に相手から詰まされるか=詰めろ(mate_threat_against_side_to_move)を含む。
+    王手中は詰めろ検出をスキップする(mate_threat_skipped_due_to_check)。
+    """
+    board = _board_snapshot()
+    if board is None:
+        return {"ok": False, "error": "no_active_game"}
+    result = analysis.analyze(board)
+    result["ok"] = True
+    return result
+
+
+@mcp.tool()
+def verify_moves(moves: list[str], depth: int = analysis.DEFAULT_SEARCH_DEPTH) -> dict:
+    """候補手(USI表記、最大10件)を機械検証する(盤面は変更しない)。Claude思考モード用。
+
+    各候補について、legal(合法か)・is_mate(相手玉が即詰みか)・gives_check(王手か)・
+    allows_mate(指した後に相手から自玉への詰みが生じるか=頓死チェック)・
+    material_change(双方が材料点上の最善を尽くした場合の材料点差の変化。負なら駒損)・
+    reply_pv_usi(その読み筋)を返す。
+    """
+    board = _board_snapshot()
+    if board is None:
+        return {"ok": False, "error": "no_active_game"}
+    if not moves:
+        return {"ok": False, "error": "no_moves_given"}
+    depth = max(1, min(4, depth))
+    results = analysis.verify_moves(board, moves[:10], depth=depth)
+    return {"ok": True, "results": results}
+
+
+@mcp.tool()
+def simulate_line(moves: list[str]) -> dict:
+    """読み筋(双方の指し手のUSI表記列)を盤のコピーへ順に適用する(実盤面は変更しない)。
+
+    Claude思考モード用。途中に非合法手があればillegal_moveにその位置と手を返し、
+    そこまでを適用した局面のboard(テキスト盤面)・sfen・材料点変化を返す。
+    """
+    board = _board_snapshot()
+    if board is None:
+        return {"ok": False, "error": "no_active_game"}
+    if not moves:
+        return {"ok": False, "error": "no_moves_given"}
+    result = analysis.simulate_line(board, moves)
+    result["ok"] = True
+    return result
 
 
 @mcp.tool()

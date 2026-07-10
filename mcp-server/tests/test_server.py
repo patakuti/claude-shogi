@@ -136,6 +136,57 @@ def test_load_kif_accepts_relative_path_that_already_includes_directory():
     assert load_result["ok"], load_result
 
 
+def test_analysis_tools_require_active_game():
+    assert server.analyze_position() == {"ok": False, "error": "no_active_game"}
+    assert server.verify_moves(["7g7f"]) == {"ok": False, "error": "no_active_game"}
+    assert server.simulate_line(["7g7f"]) == {"ok": False, "error": "no_active_game"}
+
+
+def test_new_game_accepts_brain_mode():
+    result = server.new_game(difficulty=1, user_side="black", mode="brain")
+    assert result["ok"]
+    assert result["mode"] == "brain"
+
+
+def test_analyze_position_returns_summary_without_moving():
+    server.new_game(difficulty=1, user_side="black", mode="brain")
+    before = server.get_state()["sfen"]
+
+    result = server.analyze_position()
+    assert result["ok"]
+    assert result["material"]["diff_black_minus_white"] == 0
+    assert result["mate_for_side_to_move"] is None
+
+    assert server.get_state()["sfen"] == before
+
+
+def test_verify_moves_checks_candidates_without_moving():
+    server.new_game(difficulty=1, user_side="black", mode="brain")
+    before = server.get_state()["sfen"]
+
+    result = server.verify_moves(["7g7f", "1a1b"])
+    assert result["ok"]
+    ok_entry, bad_entry = result["results"]
+    assert ok_entry["legal"]
+    assert ok_entry["allows_mate"] is None
+    assert not bad_entry["legal"]
+
+    assert server.get_state()["sfen"] == before
+
+
+def test_simulate_line_does_not_touch_real_board():
+    server.new_game(difficulty=1, user_side="black", mode="brain")
+    before = server.get_state()["sfen"]
+
+    result = server.simulate_line(["7g7f", "3c3d", "8h2b+"])
+    assert result["ok"]
+    assert result["applied"] == ["7g7f", "3c3d", "8h2b+"]
+    assert result["illegal_move"] is None
+
+    assert server.get_state()["sfen"] == before
+    assert server.get_state()["move_number"] == 1
+
+
 def test_board_fragment_without_active_game():
     from shogi_mcp import gui_server
 
