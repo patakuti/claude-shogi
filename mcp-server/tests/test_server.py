@@ -187,6 +187,82 @@ def test_simulate_line_does_not_touch_real_board():
     assert server.get_state()["move_number"] == 1
 
 
+def test_apply_move_comment_is_saved_to_kif():
+    result = server.new_game(difficulty=1, user_side="black", mode="brain")
+    kif_path = Path(result["kif_path"])
+
+    server.apply_move("7g7f", comment="角道を開ける。")
+    loaded = server.kif_store.KifStore.load(kif_path)
+    assert loaded.comments == {1: ["角道を開ける。"]}
+
+
+def test_engine_move_records_normalized_eval_comment():
+    result = server.new_game(difficulty=1, user_side="black")
+    kif_path = Path(result["kif_path"])
+    server.apply_move("7g7f")
+
+    move_result = server.engine_move()
+    assert move_result["ok"]
+
+    loaded = server.kif_store.KifStore.load(kif_path)
+    # 2手目(後手=エンジンの手)に評価値行が付いていること
+    assert 2 in loaded.comments
+    eval_line = loaded.comments[2][0]
+    assert eval_line.startswith("eval ")
+    assert ("cp:" in eval_line) or ("mate:" in eval_line)
+
+    # 符号の正規化: 後手が指した直後の評価値なので、エンジン(手番側)視点の値を
+    # 符号反転した「先手有利=正」の値が書かれている
+    think = move_result["think"]
+    if think["score_cp"] is not None:
+        assert f"cp:{-think['score_cp']}" in eval_line
+
+
+def test_add_comment_appends_to_last_move():
+    result = server.new_game(difficulty=1, user_side="black")
+    kif_path = Path(result["kif_path"])
+
+    blocked = server.add_comment("まだ指していない")
+    assert not blocked["ok"]
+    assert blocked["error"] == "no_move_to_comment"
+
+    server.apply_move("7g7f", comment="角道を開ける。")
+    ok = server.add_comment("後から一言。")
+    assert ok["ok"]
+    assert ok["move_number"] == 1
+
+    loaded = server.kif_store.KifStore.load(kif_path)
+    assert loaded.comments == {1: ["角道を開ける。", "後から一言。"]}
+
+
+def test_add_comment_works_after_game_over():
+    server.new_game(difficulty=1, user_side="black")
+    server.apply_move("7g7f")
+    server.resign()
+
+    result = server.add_comment("完敗。次はもっと粘る。")
+    assert result["ok"]
+    assert result["move_number"] == 1
+
+
+def test_load_kif_restores_comments_and_autosave_keeps_them():
+    result = server.new_game(difficulty=1, user_side="black", mode="brain")
+    kif_path = Path(result["kif_path"])
+    server.apply_move("7g7f", comment="角道を開ける。")
+
+    server._session.close()
+    server._session = None
+
+    load_result = server.load_kif(str(kif_path))
+    assert load_result["ok"]
+
+    # 再開後に指し進めて自動保存(全体書き直し)されても、既存コメントが残ること
+    server.apply_move("3c3d")
+    server.apply_move("2g2f", comment="飛車先を伸ばす。")
+    loaded = server.kif_store.KifStore.load(kif_path)
+    assert loaded.comments == {1: ["角道を開ける。"], 3: ["飛車先を伸ばす。"]}
+
+
 def test_board_fragment_without_active_game():
     from shogi_mcp import gui_server
 
