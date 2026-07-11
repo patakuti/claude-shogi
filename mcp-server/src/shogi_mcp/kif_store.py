@@ -44,6 +44,25 @@ class GameMeta:
     mode: str  # "auto" | "discuss" | "user" | "brain"
 
 
+# ユーザー側の対局者名(モード別)。自動/対話はエンジンヒント併用だが、
+# 手の決定主体としてClaudeと表記する(02_design.md §13.6)。
+_MODE_PLAYER_NAMES = {
+    "auto": "Claude(自動)",
+    "discuss": "Claude(対話)",
+    "user": "ユーザー",
+    "brain": "Claude(思考)",
+}
+
+
+def player_names(meta: GameMeta) -> tuple[str, str]:
+    """メタ情報から(先手名, 後手名)を導出する(02_design.md §13.6)。"""
+    user_name = _MODE_PLAYER_NAMES.get(meta.mode, meta.mode)
+    engine_name = f"やねうら王 Lv{meta.difficulty}"
+    if meta.user_side == "black":
+        return user_name, engine_name
+    return engine_name, user_name
+
+
 @dataclass(frozen=True)
 class LoadedGame:
     meta: GameMeta
@@ -97,7 +116,7 @@ class KifStore:
 
         exporter = KIF.Exporter(str(self.path))
         try:
-            exporter.header(names=["先手", "後手"])
+            exporter.header(names=list(player_names(self.meta)))
             exporter.kifu.write(
                 f"*difficulty:{self.meta.difficulty} "
                 f"user_side:{self.meta.user_side} "

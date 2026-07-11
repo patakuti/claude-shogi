@@ -70,3 +70,33 @@ def test_comments_survive_resigned_save(store):
     loaded = kif_store.KifStore.load(store.path)
     assert loaded.resigned
     assert loaded.comments == {2: ["eval cp:-30"]}
+
+
+# --- 対局者名(02_design.md §13.6) ---------------------------------------------
+
+
+def test_player_names_by_mode_and_side():
+    assert kif_store.player_names(
+        kif_store.GameMeta(difficulty=2, user_side="black", mode="brain")
+    ) == ("Claude(思考)", "やねうら王 Lv2")
+    assert kif_store.player_names(
+        kif_store.GameMeta(difficulty=5, user_side="white", mode="user")
+    ) == ("やねうら王 Lv5", "ユーザー")
+    assert kif_store.player_names(
+        kif_store.GameMeta(difficulty=1, user_side="black", mode="auto")
+    ) == ("Claude(自動)", "やねうら王 Lv1")
+    assert kif_store.player_names(
+        kif_store.GameMeta(difficulty=3, user_side="white", mode="discuss")
+    ) == ("やねうら王 Lv3", "Claude(対話)")
+
+
+def test_kif_header_records_player_names(store):
+    store.save(_moves_int(MOVES_USI))
+    text = store.path.read_text(encoding="cp932")
+    # cshogiのExporterは全角コロンで書き出す(ShogiGUI等の標準形式)
+    assert "先手：Claude(思考)" in text
+    assert "後手：やねうら王 Lv2" in text
+    # cshogi Parserでも読み戻せること(リプレイ画面で使用)
+    parser = cshogi.KIF.Parser.parse_file(str(store.path))
+    assert parser.names[0] == "Claude(思考)"
+    assert parser.names[1] == "やねうら王 Lv2"

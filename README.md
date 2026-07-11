@@ -40,8 +40,9 @@ scripts/setup_engine.sh
 提供するツール: `new_game` / `get_state` / `apply_move` / `engine_move` / `engine_hint` /
 `save_kif` / `load_kif` / `resign` / `add_comment`(詳細は`02_design.md` §3, §12)、および
 Claude思考モード用の解析ツール `analyze_position` / `verify_moves` / `simulate_line`
-(同§11。エンジン不使用のcshogiベース自前実装で、詰み探索・頓死チェック・浅い駒得探索・
-読み筋の検証を行う)。
+(同§11, §13。エンジン不使用のcshogiベース自前実装で、詰み探索・詰めろ検出(王手中は
+全回避手の個別検証)・自駒への当たり一覧(浮き駒の検出)・頓死チェック・
+浅い探索(駒得+玉の安全度)・読み筋の検証を行う)。
 
 MCPサーバー起動時、`http://localhost:8765/` でGUI盤面(SVG)を配信するHTTPサーバーも
 常時待受する(標準ライブラリの`http.server`のみで実装、追加の外部依存なし)。ブラウザで
@@ -94,13 +95,15 @@ Claude Code上で以下のスラッシュコマンドを使う。難易度(1〜5
 
 ### 対局の振り返り(リプレイ)
 
-対局中、KIFには指し手に加えて以下がKIF標準のコメント行(`*`)として記録される
+対局中、KIFには指し手に加えて以下が記録される
 (棋譜ファイル1つで完結し、ShogiGUI等の既存棋譜ビューアでもそのまま読める)。
 
-- **エンジンの評価値**: `engine_move`のたびに`*eval cp:120 pv:...`形式で自動記録
+- **対局者名**: 先手・後手が誰か(例: `先手：Claude(思考)` / `後手：やねうら王 Lv1`)を
+  KIFヘッダーに記録。対局中のGUI盤面とリプレイ画面にも表示される。
+- **エンジンの評価値**: `engine_move`のたびに`*eval cp:120 pv:...`形式のコメント行で自動記録
   (先手有利が正)。
 - **Claudeのコメント**: Claude思考モード・Claude対話モードでは、着手の狙いや山場の所感が
-  `apply_move`の`comment`引数 / `add_comment`ツール経由で記録される。
+  `apply_move`の`comment`引数 / `add_comment`ツール経由でコメント行に記録される。
 
 記録済みの対局は `http://localhost:8765/replay` でブラウザ再生できる。対局の選択、
 手数スライダー/前後ボタン(←→キー対応)での盤面送り、指し手ごとのコメント表示、

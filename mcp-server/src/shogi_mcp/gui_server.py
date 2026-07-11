@@ -74,7 +74,7 @@ button { min-width: 3em; }
 <body>
 <h2>対局の振り返り</h2>
 <p><a href="/">対局中の盤面へ戻る</a></p>
-<select id="game"></select> <span id="status"></span>
+<select id="game"></select> <span id="players"></span> <span id="status"></span>
 <div id="controls">
   <button id="first">|◀</button>
   <button id="prev">◀</button>
@@ -117,6 +117,7 @@ async function selectGame(name) {
   file = name;
   data = await fetchJSON("/replay/game?file=" + encodeURIComponent(name));
   $("slider").max = data.moves.length;
+  $("players").textContent = data.names ? "▲" + data.names[0] + " △" + data.names[1] : "";
   $("status").textContent = data.status ? "(" + data.status + ")" : "";
   drawGraph();
   await goto(data.moves.length);
@@ -247,7 +248,9 @@ def _game_data(path: Path) -> dict:
     status = _ENDGAME_LABELS.get(parser.endgame or "")
     if status is None and board.is_game_over():
         status = "詰み"
-    return {"moves": moves, "status": status}
+    # 対局者名(KIFヘッダーの先手:/後手:行)。記録が無い旧棋譜は「先手」「後手」のまま。
+    names = list(getattr(parser, "names", None) or ["先手", "後手"])
+    return {"moves": moves, "status": status, "names": names}
 
 
 def _board_svg_at(path: Path, ply: int) -> str:

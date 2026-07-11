@@ -29,10 +29,17 @@ argument-hint: [difficulty 1-5] [user_side black|white]
 1. `get_state()` と `analyze_position()` で局面を把握する。
 2. **強制事項(この順で確認)**:
    - `mate_for_side_to_move` が見つかっていれば、その`first_move_usi`をそのまま指す(詰み逃し防止)。
-   - 自玉が王手されていれば(`in_check`)、受けの候補だけを考える。
+   - 自玉が王手されていれば(`in_check`)、`check_evasions.safe_usi`(回避後に詰みが残らない手)
+     の中から受けを選ぶ。`all_allow_mate: true`なら受けなし=自分からの即詰みがない限り
+     負け筋なので、投了を検討する(下記手順6)。
    - `mate_threat_against_side_to_move` が見つかっていれば(詰めろ)、受ける手
      (玉の逃げ道を作る・詰み筋を消す・利きを足す)を最優先で考える。
      ただし自分からの詰み・より速い攻めがある場合は攻め合いも可(`verify_moves`で確認してから)。
+   - `attacked_pieces`(自分の駒への当たり一覧)を**毎手必ず確認**する。
+     `hanging: true`(紐なしの浮き駒)や、安い駒で当たられている駒
+     (`cheapest_attacker`が当たられた駒より安い)があれば、その駒の処置
+     (逃げる・紐を付ける・取り返しの勘定・カウンター)を候補手に必ず含める。
+     当たりの見落としはこのモードの典型的な敗因パターン。
 3. それ以外は自分で方針を立て、候補手を3〜5手選んで `verify_moves(moves)` にかける。
    - `allows_mate` が付いた手は**指さない**(頓死)。
    - `material_change` が大きく負(目安: -300以下)の手は原則捨てる。
@@ -44,8 +51,8 @@ argument-hint: [difficulty 1-5] [user_side black|white]
 5. 決めた手を `apply_move(move, comment=...)` で指す。`comment`にはその手の狙い・読みを
    1〜2文で添える(KIFに記録され、対局後に `http://localhost:8765/replay` で振り返れる)。
    非合法と返されたら、盤面をよく見直して `verify_moves` で確認してから指し直す。
-6. 王手をかけられた局面などで、全候補(全合法手)に`allows_mate`が付き受けが存在しない
-   場合は、粘らずに `resign()` で投了する(将棋の作法に従う)。
+6. `check_evasions.all_allow_mate: true`(受けなし)や、全候補(全合法手)に`allows_mate`が
+   付くなど受けが存在しない場合は、粘らずに `resign()` で投了する(将棋の作法に従う)。
 
 USI表記とKIF表記の対応は `get_state()` の `legal_moves`(usi/kifペア)を参照する。
 
