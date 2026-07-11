@@ -152,6 +152,20 @@ def _state_dict(session: SessionState) -> dict:
     }
 
 
+def _attack_report(session: SessionState) -> dict:
+    """現局面のuser_side/エンジン側それぞれの駒への当たり一覧(§14.2)。
+
+    user_pieces=放置すると取られる警告、engine_pieces=取れる駒の機会。
+    """
+    board = cshogi.Board(session.game.sfen())
+    user_color = cshogi.BLACK if session.user_side == "black" else cshogi.WHITE
+    engine_color = cshogi.WHITE if user_color == cshogi.BLACK else cshogi.BLACK
+    return {
+        "user_pieces": analysis.attacked_pieces(board, color=user_color),
+        "engine_pieces": analysis.attacked_pieces(board, color=engine_color),
+    }
+
+
 def _eval_comment_line(primary, mover: str) -> Optional[str]:
     """engine_moveの思考結果からKIFコメント用の評価値行を作る(02_design.md §12.2)。
 
@@ -223,6 +237,8 @@ def apply_move(move: str, comment: str = "") -> dict:
 
     commentが非空なら、この手へのコメント(狙い・読みなど)としてKIFに記録する
     (KIF標準の`*`コメント行。振り返り再生 http://localhost:8765/replay で表示される)。
+    応答にはattack_report(§14.2。user_pieces=放置すると取られる警告、
+    engine_pieces=取れる駒の機会)を毎回含む。
     """
     session = _current_session()
     if session is None:
@@ -241,7 +257,9 @@ def apply_move(move: str, comment: str = "") -> dict:
         if comment:
             session.add_comment_lines(session.last_move_number(), [comment])
         session.autosave()
-        return _state_dict(session)
+        state = _state_dict(session)
+        state["attack_report"] = _attack_report(session)
+        return state
 
 
 @mcp.tool()
@@ -249,6 +267,8 @@ def engine_move(byoyomi_ms: int = 0) -> dict:
     """コンピュータ側の手をやねうら王に思考させ、盤面へ反映して返す。
 
     byoyomi_ms=0の場合は現在の難易度プリセットの秒読みを使う。
+    応答にはattack_report(§14.2。user_pieces=放置すると取られる警告、
+    engine_pieces=取れる駒の機会)を毎回含む。
     """
     session = _current_session()
     if session is None:
@@ -297,6 +317,7 @@ def engine_move(byoyomi_ms: int = 0) -> dict:
             "score_mate": primary.score_mate if primary else None,
             "pv": primary.pv if primary else [],
         }
+        result["attack_report"] = _attack_report(session)
         return result
 
 
@@ -367,8 +388,13 @@ def verify_moves(moves: list[str], depth: int = analysis.DEFAULT_SEARCH_DEPTH) -
 
     各候補について、legal(合法か)・is_mate(相手玉が即詰みか)・gives_check(王手か)・
     allows_mate(指した後に相手から自玉への詰みが生じるか=頓死チェック)・
-    material_change(双方が材料点上の最善を尽くした場合の材料点差の変化。負なら駒損)・
-    reply_pv_usi(その読み筋)を返す。
+    destination(移動先/打ち込み先マスへの相手の利き数opponent_effectsと味方の紐数
+    own_supports。opponent_effects>0かつown_supports==0はタダ捨ての警告)・
+    own_attacked_after(着手直後の自駒への当たり上位5件。§13.3のattacked_pieces形式)・
+    search_depth_completed(反復深化で完了した深さ。0なら信頼できる読みなし)・
+    material_change(双方が材料点上の最善を尽くした場合の材料点差の変化。負なら駒損。
+    search_depth_completed==0のときはnull)・reply_pv_usi(その読み筋)を返す。
+    destination/own_attacked_afterはis_mateの候補には付けない。
     """
     board = _board_snapshot()
     if board is None:
