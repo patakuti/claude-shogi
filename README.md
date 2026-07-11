@@ -40,9 +40,17 @@ scripts/setup_engine.sh
 提供するツール: `new_game` / `get_state` / `apply_move` / `engine_move` / `engine_hint` /
 `save_kif` / `load_kif` / `resign` / `add_comment`(詳細は`02_design.md` §3, §12)、および
 Claude思考モード用の解析ツール `analyze_position` / `verify_moves` / `simulate_line`
-(同§11, §13。エンジン不使用のcshogiベース自前実装で、詰み探索・詰めろ検出(王手中は
+(同§11, §13, §14。エンジン不使用のcshogiベース自前実装で、詰み探索・詰めろ検出(王手中は
 全回避手の個別検証)・自駒への当たり一覧(浮き駒の検出)・頓死チェック・
-浅い探索(駒得+玉の安全度)・読み筋の検証を行う)。
+浅い探索(駒得+玉の安全度、反復深化で打ち切り時のノイズを排除)・読み筋の検証を行う)。
+
+`apply_move`/`engine_move`の応答には毎回`attack_report`(ユーザー側/エンジン側
+それぞれの駒への当たり一覧)を含む。`analyze_position`の呼び忘れがあっても、
+放置すると取られる駒・タダ取りできる駒が毎手必ず目に入る(§14.2)。
+`verify_moves`の各候補には`destination`(移動先/打ち込み先マスへの相手の利き数・
+味方の紐数)と`own_attacked_after`(着手直後の自駒への当たり上位5件)、および
+反復深化で完了した探索深さ`search_depth_completed`(0なら`material_change`は
+`null`)も含む(§14.3, §14.4)。
 
 MCPサーバー起動時、`http://localhost:8765/` でGUI盤面(SVG)を配信するHTTPサーバーも
 常時待受する(標準ライブラリの`http.server`のみで実装、追加の外部依存なし)。ブラウザで
