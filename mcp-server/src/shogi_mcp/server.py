@@ -341,8 +341,10 @@ def analyze_position() -> dict:
     """局面の構造化要約を返す(盤面は変更しない)。Claude思考モード(/shogi-brain)用。
 
     駒割り(material)・持ち駒(hands)・手番側から相手玉への詰み(mate_for_side_to_move)・
-    手番側が放置した場合に相手から詰まされるか=詰めろ(mate_threat_against_side_to_move)を含む。
-    王手中は詰めろ検出をスキップする(mate_threat_skipped_due_to_check)。
+    手番側が放置した場合に相手から詰まされるか=詰めろ(mate_threat_against_side_to_move)・
+    手番側の駒への当たり一覧(attacked_pieces。相手の利き数/味方の紐の数/浮き駒かどうか)を含む。
+    王手中は詰めろ検出の代わりに全回避手を個別検証し、回避後も詰みが残らない手を返す
+    (check_evasions.safe_usi。all_allow_mate=trueなら受けなし)。
     """
     board = _board_snapshot()
     if board is None:

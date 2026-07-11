@@ -1,6 +1,13 @@
+import random
+
 import cshogi
 
 from shogi_mcp import analysis
+
+
+def _sq(file: int, rank: int) -> int:
+    """筋・段(1-9)からマス番号へ。"""
+    return (file - 1) * 9 + (rank - 1)
 
 # 頭金の1手詰め: 後手玉5a、先手歩5c(5bに利き)、先手持ち駒 金。▲G*5bで詰み。
 MATE_IN_1_SFEN = "4k4/9/4P4/9/9/9/9/9/4K4 b G 1"
@@ -31,6 +38,21 @@ FORK_SFEN = "4k4/9/3r1g3/9/9/9/3N5/6GK1/9 b - 1"
 # 放置すると△G*5hの1手詰め。▲G*5hと受ければ詰みはない。
 SUDDEN_DEATH_SFEN = "4k4/9/9/9/9/9/4p4/9/4K4 b Gg 1"
 
+# 当たり一覧用: 先手銀5e(後手歩5dの当たり・紐なし)、先手歩1e(後手香1dの当たり・紐なし)。
+HANGING_SFEN = "4k4/9/9/4p3l/4S3P/9/9/9/4K4 b - 1"
+
+# 紐付き: 上の銀5eに金5fで紐を付けた形(歩1eと香1dは除去)。
+DEFENDED_SFEN = "4k4/9/9/4p4/4S4/4G4/9/9/4K4 b - 1"
+
+# 受けなしの王手: 3手詰め(MATE_IN_3)の初手▲G*5cを指した直後の局面(後手番)。
+# 後手玉はどこへ逃げても持ち駒の金で1手詰め。
+NO_ESCAPE_CHECK_SFEN = "9/4k4/4G4/4P4/9/9/9/9/4K4 w G 1"
+
+# 玉の危険度比較用: 材料は同じ(後手飛1枚)で、飛車が先手玉のコビン(4筋)を
+# 直射している形と、玉から離れた1筋にいる形。
+KING_EXPOSED_SFEN = "4k4/9/9/9/3r5/9/9/9/4K4 b - 1"
+KING_SAFE_SFEN = "4k4/9/9/9/8r/9/9/9/4K4 b - 1"
+
 
 # --- material ---------------------------------------------------------------
 
@@ -47,6 +69,95 @@ def test_material_reflects_gold_advantage():
     board.set_sfen("4k4/9/9/9/9/9/9/9/4K4 b G 1")
     black, white = analysis.material(board)
     assert black - white == 550
+
+
+# --- attackers(利き計算) -----------------------------------------------------
+
+
+def test_attackers_startpos_known_squares():
+    board = cshogi.Board()
+    pieces = board.pieces
+    # 5五は双方の利きゼロ
+    assert analysis.attackers(pieces, cshogi.BLACK, _sq(5, 5)) == []
+    assert analysis.attackers(pieces, cshogi.WHITE, _sq(5, 5)) == []
+    # 5八への先手の利き: 金4九・金6九・玉5九・飛2八(横利き)の4つ
+    got = sorted(analysis.attackers(pieces, cshogi.BLACK, _sq(5, 8)))
+    assert got == sorted([_sq(4, 9), _sq(6, 9), _sq(5, 9), _sq(2, 8)])
+    # 1三(後手歩)への後手の紐: 香1一(直射)・桂2一・角2二
+    got = sorted(analysis.attackers(pieces, cshogi.WHITE, _sq(1, 3)))
+    assert got == sorted([_sq(1, 1), _sq(2, 1), _sq(2, 2)])
+    # 走り利きの遮断: 飛2八の横利きは角8八で止まり、9八には届かない
+    assert analysis.attackers(pieces, cshogi.BLACK, _sq(9, 8)) == [_sq(9, 9)]  # 玉ではなく香9九の縦利きのみ
+
+
+def test_attackers_cross_check_with_pseudo_legal_moves():
+    """ランダム対局の各局面で、手番側の「取る手」の(from, to)集合と利き計算が一致すること。
+
+    pseudo_legal_movesはピン・自玉が取られる手も生成する(実機確認済み)ため、
+    純粋な利きの検証に使える。王手中は回避手のみ生成されるためスキップする。
+    """
+    rng = random.Random(42)
+    board = cshogi.Board()
+    checked_positions = 0
+    for _ in range(150):
+        moves = list(board.legal_moves)
+        if not moves or board.is_game_over():
+            break
+        board.push(rng.choice(moves))
+        if board.is_game_over() or board.is_check():
+            continue
+        pieces = board.pieces
+        own = board.turn
+        opp_is_white = own == cshogi.BLACK
+        expected = set()
+        for m in board.pseudo_legal_moves:
+            if cshogi.move_is_drop(m):
+                continue
+            to = cshogi.move_to(m)
+            if pieces[to] != 0:
+                expected.add((cshogi.move_from(m), to))
+        got = set()
+        for sq, code in enumerate(pieces):
+            if code == 0 or (code >= 16) != opp_is_white:
+                continue
+            for a in analysis.attackers(pieces, own, sq):
+                got.add((a, sq))
+        assert got == expected, board.sfen()
+        checked_positions += 1
+    assert checked_positions > 50  # 検証が空回りしていないこと
+
+
+# --- attacked_pieces(当たり一覧) ---------------------------------------------
+
+
+def test_attacked_pieces_lists_hanging_pieces():
+    board = cshogi.Board()
+    board.set_sfen(HANGING_SFEN)
+    result = analysis.attacked_pieces(board)
+    # 価値の高い順: 銀5五(歩の当たり) → 歩1五(香の当たり)。いずれも紐なし。
+    assert [e["square"] for e in result] == ["5五", "1五"]
+    silver, pawn = result
+    assert silver == {
+        "square": "5五", "piece": "銀", "attackers": 1, "defenders": 0,
+        "hanging": True, "cheapest_attacker": "歩",
+    }
+    assert pawn["piece"] == "歩"
+    assert pawn["cheapest_attacker"] == "香"
+    assert pawn["hanging"]
+
+
+def test_attacked_pieces_counts_defenders():
+    board = cshogi.Board()
+    board.set_sfen(DEFENDED_SFEN)
+    (entry,) = analysis.attacked_pieces(board)
+    assert entry["square"] == "5五"
+    assert entry["defenders"] == 1  # 金5六の紐
+    assert not entry["hanging"]
+
+
+def test_attacked_pieces_empty_at_startpos():
+    board = cshogi.Board()
+    assert analysis.attacked_pieces(board) == []
 
 
 # --- find_mate / find_mate_threat -------------------------------------------
@@ -111,7 +222,8 @@ def test_analyze_startpos():
     assert not result["in_check"]
     assert result["mate_for_side_to_move"] is None
     assert result["mate_threat_against_side_to_move"] is None
-    assert not result["mate_threat_skipped_due_to_check"]
+    assert result["check_evasions"] is None
+    assert result["attacked_pieces"] == []
 
 
 def test_analyze_reports_mate_and_threat():
@@ -128,10 +240,53 @@ def test_analyze_reports_mate_and_threat():
     result = analysis.analyze(board)
     assert result["mate_threat_against_side_to_move"] is not None
 
+
+def test_analyze_check_evasions_with_safe_escape():
+    # 飛車の王手1本だけなら、どの回避手の後も詰みは残らない
+    board = cshogi.Board()
     board.set_sfen(IN_CHECK_SFEN)
+    sfen_before = board.sfen()
     result = analysis.analyze(board)
     assert result["in_check"]
-    assert result["mate_threat_skipped_due_to_check"]
+    evasions = result["check_evasions"]
+    assert evasions is not None
+    assert evasions["total"] == len(evasions["safe_usi"]) > 0
+    assert not evasions["all_allow_mate"]
+    assert board.sfen() == sfen_before  # 盤面が変わっていないこと
+
+
+def test_analyze_check_evasions_no_escape():
+    # どこへ逃げても持ち駒の金で1手詰め=受けなし
+    board = cshogi.Board()
+    board.set_sfen(NO_ESCAPE_CHECK_SFEN)
+    result = analysis.analyze(board)
+    assert result["in_check"]
+    evasions = result["check_evasions"]
+    assert evasions["total"] > 0
+    assert evasions["safe_usi"] == []
+    assert evasions["all_allow_mate"]
+
+
+def test_analyze_reports_attacked_pieces():
+    board = cshogi.Board()
+    board.set_sfen(HANGING_SFEN)
+    result = analysis.analyze(board)
+    assert [e["piece"] for e in result["attacked_pieces"]] == ["銀", "歩"]
+
+
+# --- 玉の安全度(king safety) -------------------------------------------------
+
+
+def test_eval_penalizes_exposed_king():
+    # 材料は同じ(後手飛1枚)。飛車が玉頭側の利きを持つ局面の方が評価が低いこと。
+    exposed = cshogi.Board()
+    exposed.set_sfen(KING_EXPOSED_SFEN)
+    safe = cshogi.Board()
+    safe.set_sfen(KING_SAFE_SFEN)
+    # depth=0: 取る手がない局面なので静的評価がそのまま返る
+    score_exposed = analysis.search_material(exposed, depth=0)["score"]
+    score_safe = analysis.search_material(safe, depth=0)["score"]
+    assert score_exposed < score_safe
 
 
 # --- verify_moves -----------------------------------------------------------
