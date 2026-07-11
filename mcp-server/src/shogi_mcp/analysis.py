@@ -239,13 +239,14 @@ def _eval_for_side_to_move(board: cshogi.Board) -> int:
     return score if board.turn == cshogi.BLACK else -score
 
 
-def attacked_pieces(board: cshogi.Board) -> list[dict]:
-    """手番側の駒(玉以外)への当たり一覧(§13.3)。駒の価値が高い順。
+def attacked_pieces(board: cshogi.Board, color: Optional[int] = None) -> list[dict]:
+    """colorの駒(玉以外)への当たり一覧(§13.3, §14.1)。駒の価値が高い順。
 
-    ピンや取り合いの手順は考慮しない静的な利き数。玉への当たり=王手はin_checkで報告する。
+    colorを省略すると従来どおり手番側。ピンや取り合いの手順は考慮しない静的な
+    利き数。玉への当たり=王手はin_checkで報告する。
     """
     pieces = board.pieces
-    own_color = board.turn
+    own_color = board.turn if color is None else color
     opp_color = cshogi.WHITE if own_color == cshogi.BLACK else cshogi.BLACK
     own_is_white = own_color == cshogi.WHITE
 
@@ -416,20 +417,48 @@ class _Searcher:
         return best_score, best_pv
 
 
+def _iterative_deepen(searcher: _Searcher, max_depth: int) -> tuple[Optional[int], list[int], int]:
+    """反復深化(§14.4): 深さ1からmax_depthまで、ノード予算を共有して順に探索する。
+
+    打ち切りが発生した反復の結果は捨て、直前に完了した深さの結果(スコア・PV)を返す。
+    1回も完了しなければ(score=None, pv=[], completed_depth=0)。
+    max_depth<=0は深さ0(静止探索のみ)を1回実行する特殊ケース(内部評価用)。
+    """
+    if max_depth <= 0:
+        score, pv = searcher.search(0, -MATE_SCORE - 1, MATE_SCORE + 1)
+        return (None, [], 0) if searcher.truncated else (score, pv, 0)
+
+    best_score: Optional[int] = None
+    best_pv: list[int] = []
+    completed_depth = 0
+    for d in range(1, max_depth + 1):
+        score, pv = searcher.search(d, -MATE_SCORE - 1, MATE_SCORE + 1)
+        if searcher.truncated:
+            break
+        best_score = score
+        best_pv = pv
+        completed_depth = d
+    return best_score, best_pv, completed_depth
+
+
 def search_material(
     board: cshogi.Board,
     depth: int = DEFAULT_SEARCH_DEPTH,
     node_limit: int = DEFAULT_NODE_LIMIT,
 ) -> dict:
-    """現局面を手番側視点で浅く読み、評価(材料点+玉の安全度)とPVを返す。盤面は変更しない。"""
+    """現局面を手番側視点で浅く読み、評価(材料点+玉の安全度)とPVを返す。盤面は変更しない。
+
+    反復深化(§14.4)で、打ち切られた反復の結果は捨てて直前に完了した深さを採用する。
+    """
     copy = _copy_board(board)
     searcher = _Searcher(copy, node_limit)
-    score, pv = searcher.search(depth, -MATE_SCORE - 1, MATE_SCORE + 1)
+    score, pv, completed_depth = _iterative_deepen(searcher, depth)
     return {
         "score": score,
         "pv_usi": [cshogi.move_to_usi(m) for m in pv],
         "nodes": searcher.nodes,
         "truncated": searcher.truncated,
+        "completed_depth": completed_depth,
     }
 
 
@@ -490,6 +519,10 @@ def verify_moves(
     手番側(=この手を指す側)の材料点変化」。負なら駒損が見込まれる。
     探索の評価には玉の安全度(§13.5)も加味されるが、material_changeは
     読み筋(PV)を適用した局面の実際の材料点差から算出する(純粋な駒得損)。
+    探索は反復深化(§14.4)。打ち切られた反復のPVは信用せず、完了した深さが
+    0(search_depth_completed == 0)ならmaterial_change/reply_pv_usiは
+    信頼できる読みなしとして返す。
+    destination/own_attacked_after(§14.3)はis_mateの候補には付けない。
     """
     results = []
     for usi in usi_moves:
@@ -501,6 +534,8 @@ def verify_moves(
 
         base_black, base_white = material(copy)
         mover_is_black = copy.turn == cshogi.BLACK
+        mover_color = cshogi.BLACK if mover_is_black else cshogi.WHITE
+        opponent_color = cshogi.WHITE if mover_is_black else cshogi.BLACK
         copy.push(move)
 
         entry: dict = {"usi": usi, "legal": True, "captures": None}
@@ -532,18 +567,33 @@ def verify_moves(
         else:
             entry["allows_mate"] = None
 
+        # §14.3: 着手直後(応手を読む前)の盤面に対する移動先の安全性と自駒への当たり
+        to_sq = cshogi.move_to(move)
+        pieces_after = copy.pieces
+        entry["destination"] = {
+            "square": square_name(to_sq),
+            "opponent_effects": len(attackers(pieces_after, opponent_color, to_sq)),
+            "own_supports": len(attackers(pieces_after, mover_color, to_sq)),
+        }
+        entry["own_attacked_after"] = attacked_pieces(copy, color=mover_color)[:5]
+
         searcher = _Searcher(copy, node_limit)
-        score, pv = searcher.search(depth, -MATE_SCORE - 1, MATE_SCORE + 1)
-        # PVを適用した局面の実材料点差からmaterial_changeを算出(§13.5)
-        for m in pv:
-            copy.push(m)
-        end_black, end_white = material(copy)
-        if mover_is_black:
-            entry["material_change"] = (end_black - end_white) - (base_black - base_white)
-        else:
-            entry["material_change"] = (end_white - end_black) - (base_white - base_black)
-        entry["reply_pv_usi"] = [cshogi.move_to_usi(m) for m in pv]
+        score, pv, completed_depth = _iterative_deepen(searcher, depth)
+        entry["search_depth_completed"] = completed_depth
         entry["search_truncated"] = searcher.truncated
+        if completed_depth == 0:
+            entry["material_change"] = None
+            entry["reply_pv_usi"] = []
+        else:
+            # PVを適用した局面の実材料点差からmaterial_changeを算出(§13.5)
+            for m in pv:
+                copy.push(m)
+            end_black, end_white = material(copy)
+            if mover_is_black:
+                entry["material_change"] = (end_black - end_white) - (base_black - base_white)
+            else:
+                entry["material_change"] = (end_white - end_black) - (base_white - base_black)
+            entry["reply_pv_usi"] = [cshogi.move_to_usi(m) for m in pv]
         results.append(entry)
     return results
 

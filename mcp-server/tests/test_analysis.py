@@ -53,6 +53,13 @@ NO_ESCAPE_CHECK_SFEN = "9/4k4/4G4/4P4/9/9/9/9/4K4 w G 1"
 KING_EXPOSED_SFEN = "4k4/9/9/9/3r5/9/9/9/4K4 b - 1"
 KING_SAFE_SFEN = "4k4/9/9/9/8r/9/9/9/4K4 b - 1"
 
+# destination(§14.3)検証用: 実対局の再現(馬の利きにある3四への桂打ち)。
+# 後手馬6七が3四(3d)を直射しており、3四に先手の紐はない。持ち駒は先手桂1枚。
+UNDEFENDED_DROP_SFEN = "4k4/9/9/9/9/9/3+b5/9/4K4 b N 1"
+
+# 上と同型だが、先手金3三が3四に紐を付けている(own_supports==1になること)。
+DEFENDED_DROP_SFEN = "4k4/9/6G2/9/9/9/3+b5/9/4K4 b N 1"
+
 
 # --- material ---------------------------------------------------------------
 
@@ -158,6 +165,23 @@ def test_attacked_pieces_counts_defenders():
 def test_attacked_pieces_empty_at_startpos():
     board = cshogi.Board()
     assert analysis.attacked_pieces(board) == []
+
+
+def test_attacked_pieces_color_param_defaults_to_side_to_move():
+    board = cshogi.Board()
+    board.set_sfen(HANGING_SFEN)
+    assert analysis.attacked_pieces(board, color=cshogi.BLACK) == analysis.attacked_pieces(board)
+
+
+def test_attacked_pieces_color_param_reports_other_side():
+    # HANGING_SFENは先手番。先手の銀5五・歩1五(白視点では無関係)に加え、
+    # 白の歩5四(黒銀の当たり)・香1四(黒歩の当たり)もcolor指定で取得できる。
+    board = cshogi.Board()
+    board.set_sfen(HANGING_SFEN)
+    black_side = analysis.attacked_pieces(board, color=cshogi.BLACK)
+    white_side = analysis.attacked_pieces(board, color=cshogi.WHITE)
+    assert [e["piece"] for e in black_side] == ["銀", "歩"]
+    assert [e["square"] for e in white_side] == ["1四", "5四"]
 
 
 # --- find_mate / find_mate_threat -------------------------------------------
@@ -289,6 +313,40 @@ def test_eval_penalizes_exposed_king():
     assert score_exposed < score_safe
 
 
+# --- 反復深化(iterative deepening, §14.4) -------------------------------------
+
+
+def test_search_material_completes_full_depth_with_ample_budget():
+    board = cshogi.Board()
+    board.set_sfen(KING_EXPOSED_SFEN)
+    result = analysis.search_material(board, depth=3, node_limit=analysis.DEFAULT_NODE_LIMIT)
+    assert result["completed_depth"] == 3
+    assert not result["truncated"]
+    assert result["score"] is not None
+
+
+def test_search_material_reports_zero_completed_depth_on_tiny_budget():
+    board = cshogi.Board()
+    board.set_sfen(KING_EXPOSED_SFEN)
+    result = analysis.search_material(board, depth=3, node_limit=1)
+    assert result["completed_depth"] == 0
+    assert result["truncated"]
+    assert result["score"] is None
+    assert result["pv_usi"] == []
+
+
+def test_search_material_keeps_last_completed_depth_when_next_is_truncated():
+    board = cshogi.Board()
+    board.set_sfen(KING_EXPOSED_SFEN)
+    result = analysis.search_material(board, depth=3, node_limit=5)
+    # 深さ1は完了したが、予算5では深さ2以降が打ち切られ、その結果は捨てられること
+    assert 0 <= result["completed_depth"] < 3
+    if result["completed_depth"] == 0:
+        assert result["score"] is None
+    else:
+        assert result["truncated"]
+
+
 # --- verify_moves -----------------------------------------------------------
 
 
@@ -346,6 +404,49 @@ def test_verify_moves_does_not_mutate_board():
     sfen_before = board.sfen()
     analysis.verify_moves(board, ["7g7f", "2g2f"])
     assert board.sfen() == sfen_before
+
+
+# --- destination / own_attacked_after(§14.3) ---------------------------------
+
+
+def test_verify_moves_warns_undefended_drop_into_opponent_effects():
+    # 実対局の再現ケース: 馬の利きにある3四への桂打ちがdestinationで警告されること。
+    board = cshogi.Board()
+    board.set_sfen(UNDEFENDED_DROP_SFEN)
+    (entry,) = analysis.verify_moves(board, ["N*3d"])
+    assert entry["destination"] == {"square": "3四", "opponent_effects": 1, "own_supports": 0}
+    # 打った桂自身が着手直後に馬に当たっていること
+    assert [e["square"] for e in entry["own_attacked_after"]] == ["3四"]
+    assert entry["own_attacked_after"][0]["hanging"]
+
+
+def test_verify_moves_defended_drop_has_own_support():
+    board = cshogi.Board()
+    board.set_sfen(DEFENDED_DROP_SFEN)
+    (entry,) = analysis.verify_moves(board, ["N*3d"])
+    assert entry["destination"] == {"square": "3四", "opponent_effects": 1, "own_supports": 1}
+    assert not entry["own_attacked_after"][0]["hanging"]
+
+
+def test_verify_moves_is_mate_candidate_has_no_destination():
+    board = cshogi.Board()
+    board.set_sfen(MATE_IN_1_SFEN)
+    (entry,) = analysis.verify_moves(board, ["G*5b"])
+    assert "destination" not in entry
+    assert "own_attacked_after" not in entry
+
+
+# --- 反復深化がverify_movesの信頼性判断に反映されること(§14.4) -----------------
+
+
+def test_verify_moves_reports_zero_search_depth_completed_on_tiny_budget():
+    board = cshogi.Board()
+    board.set_sfen(KING_EXPOSED_SFEN)
+    (entry,) = analysis.verify_moves(board, ["5i5h"], node_limit=1)
+    assert entry["search_depth_completed"] == 0
+    assert entry["search_truncated"]
+    assert entry["material_change"] is None
+    assert entry["reply_pv_usi"] == []
 
 
 # --- simulate_line ----------------------------------------------------------

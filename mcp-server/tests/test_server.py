@@ -86,6 +86,42 @@ def test_engine_move_thinks_and_updates_board():
     assert "think" in result
 
 
+def test_apply_move_includes_attack_report_for_both_sides():
+    server.new_game(difficulty=1, user_side="black")
+    result = server.apply_move("7g7f")
+    assert "attack_report" in result
+    report = result["attack_report"]
+    # ▲7六歩で角道が開き、後手(=エンジン側)の3三歩に角の当たりが生じること。
+    assert report["user_pieces"] == []
+    assert [e["square"] for e in report["engine_pieces"]] == ["3三"]
+    assert not report["engine_pieces"][0]["hanging"]
+
+
+def test_apply_move_attack_report_reflects_user_side_white():
+    server.new_game(difficulty=1, user_side="white")
+    server.apply_move("2g2f")
+    server.apply_move("8c8d")
+    server.apply_move("2f2e")
+    server.apply_move("8d8e")
+    result = server.apply_move("2e2d")
+
+    report = result["attack_report"]
+    # user_side="white"なので、白の歩(2三)への当たりはuser_pieces、
+    # 黒の歩(2四)への当たりはengine_piecesに載ること。
+    assert [e["square"] for e in report["user_pieces"]] == ["2三"]
+    assert report["user_pieces"][0]["hanging"]
+    assert [e["square"] for e in report["engine_pieces"]] == ["2四"]
+    assert not report["engine_pieces"][0]["hanging"]
+
+
+def test_engine_move_includes_attack_report():
+    server.new_game(difficulty=1, user_side="black")
+    server.apply_move("7g7f")
+    result = server.engine_move()
+    assert "attack_report" in result
+    assert set(result["attack_report"]) == {"user_pieces", "engine_pieces"}
+
+
 def test_engine_hint_does_not_modify_board():
     server.new_game(difficulty=1, user_side="black")
     before = server.get_state()
