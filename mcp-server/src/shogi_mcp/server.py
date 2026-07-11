@@ -60,6 +60,11 @@ class SessionState:
     def preset(self) -> presets.Difficulty:
         return presets.get(self.difficulty)
 
+    def player_names(self) -> tuple[str, str]:
+        """(先手名, 後手名)。メタ情報から導出する(02_design.md §13.6)。"""
+        meta = kif_store.GameMeta(self.difficulty, self.user_side, self.mode)
+        return kif_store.player_names(meta)
+
     def moves_usi(self) -> list[str]:
         return [cshogi.move_to_usi(m) for m in self.game.board.history]
 
@@ -104,7 +109,7 @@ _STATUS_LABELS = {
 
 
 def _board_fragment() -> str:
-    """gui_serverの`GET /board`が返すHTMLフラグメント(SVG + 手数/手番/終局状態)。"""
+    """gui_serverの`GET /board`が返すHTMLフラグメント(SVG + 対局者名 + 手数/手番/終局状態)。"""
     with _session_lock:
         session = _session
         if session is None:
@@ -112,8 +117,9 @@ def _board_fragment() -> str:
         svg = session.game.board_svg()
         last_line = session.game.last_move_line()
         status = session.status()
+        black_name, white_name = session.player_names()
 
-    parts = [svg]
+    parts = [svg, f"<p>▲{black_name} △{white_name}</p>"]
     if last_line is not None:
         parts.append(f"<p>{last_line}</p>")
     label = _STATUS_LABELS.get(status)
@@ -142,6 +148,7 @@ def _state_dict(session: SessionState) -> dict:
         "user_side": session.user_side,
         "difficulty": session.difficulty,
         "mode": session.mode,
+        "players": dict(zip(("black", "white"), session.player_names())),
     }
 
 

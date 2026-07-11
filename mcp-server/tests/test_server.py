@@ -45,6 +45,18 @@ def test_get_state_reflects_new_game():
     assert result["turn"] == "black"
 
 
+def test_state_and_kif_include_player_names():
+    result = server.new_game(difficulty=1, user_side="white", mode="user")
+    assert result["players"] == {"black": "やねうら王 Lv1", "white": "ユーザー"}
+    # KIFヘッダーにも対局者名が記録されること(02_design.md §13.6)
+    text = Path(result["kif_path"]).read_text(encoding="cp932")
+    assert "先手：やねうら王 Lv1" in text
+    assert "後手：ユーザー" in text
+    # GUI盤面フラグメントにも表示されること
+    fragment = server._board_fragment()
+    assert "▲やねうら王 Lv1 △ユーザー" in fragment
+
+
 def test_apply_move_updates_state_and_autosaves():
     new_game_result = server.new_game(difficulty=1, user_side="black")
     kif_path = Path(new_game_result["kif_path"])

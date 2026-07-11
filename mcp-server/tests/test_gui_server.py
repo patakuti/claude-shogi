@@ -127,6 +127,19 @@ def test_replay_game_without_comments(running_server):
     assert move["eval"] is None and move["comment"] is None
 
 
+def test_replay_game_returns_player_names(running_server):
+    # KIFヘッダーの対局者名がリプレイ用JSONに載ること(02_design.md §13.6)
+    data = json.loads(_get(running_server, "/replay/game?file=annotated.kif"))
+    assert data["names"] == ["Claude(思考)", "やねうら王 Lv1"]
+    data = json.loads(_get(running_server, "/replay/game?file=plain.kif"))
+    assert data["names"] == ["Claude(自動)", "やねうら王 Lv1"]
+
+
+def test_replay_page_shows_players(running_server):
+    body = _get(running_server, "/replay")
+    assert 'id="players"' in body
+
+
 def test_replay_board_returns_svg_per_ply(running_server):
     initial = _get(running_server, "/replay/board?file=annotated.kif&ply=0")
     after_two = _get(running_server, "/replay/board?file=annotated.kif&ply=2")
