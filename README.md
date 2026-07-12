@@ -51,6 +51,12 @@ Claude思考モード用の解析ツール `analyze_position` / `verify_moves` /
 味方の紐数)と`own_attacked_after`(着手直後の自駒への当たり上位5件)、および
 反復深化で完了した探索深さ`search_depth_completed`(0なら`material_change`は
 `null`)も含む(§14.3, §14.4)。
+`attacked_pieces`(および`attack_report`/`own_attacked_after`)の各駒には
+`pawn_drop_risk`(相手の持ち駒の歩を打って当てられるか。二歩・盤端・打ち込み先の
+空き状況を考慮)も含む。盤上の利きが0でも`pawn_drop_risk: true`なら見落とし
+やすい脅威として扱う(§15.1)。`verify_moves`ツールは`node_limit`引数
+(既定5万、範囲1,000〜300,000)を受け付け、合法手が多く読みが浅くなりがちな
+複雑な局面で、呼び出し側が探索予算を増やして深い検証を要求できる(§15.2)。
 
 MCPサーバー起動時、`http://localhost:8765/` でGUI盤面(SVG)を配信するHTTPサーバーも
 常時待受する(標準ライブラリの`http.server`のみで実装、追加の外部依存なし)。ブラウザで

@@ -239,16 +239,43 @@ def _eval_for_side_to_move(board: cshogi.Board) -> int:
     return score if board.turn == cshogi.BLACK else -score
 
 
+def _pawn_drop_risk(pieces: list[int], opp_color: int, opp_pawn_count: int, sq: int) -> bool:
+    """opp_colorが持ち駒の歩を打ってsqの駒に当てられるか(§15.1)。
+
+    sqから見て相手が前進する方向に1段の打ち込み先が、盤内・空きマス・
+    二歩でなく・opp_colorにとっての最終段でもないことを確認する。
+    """
+    if opp_pawn_count <= 0:
+        return False
+    file_, rank = divmod(sq, 9)
+    origin_rank = rank + 1 if opp_color == cshogi.BLACK else rank - 1
+    if not 0 <= origin_rank <= 8:
+        return False
+    origin_sq = file_ * 9 + origin_rank
+    if pieces[origin_sq] != 0:
+        return False
+    pawn_code = cshogi.PAWN if opp_color == cshogi.BLACK else cshogi.PAWN + _WHITE_OFFSET
+    if any(pieces[file_ * 9 + r] == pawn_code for r in range(9)):
+        return False
+    illegal_rank = 0 if opp_color == cshogi.BLACK else 8
+    if origin_rank == illegal_rank:
+        return False
+    return True
+
+
 def attacked_pieces(board: cshogi.Board, color: Optional[int] = None) -> list[dict]:
-    """colorの駒(玉以外)への当たり一覧(§13.3, §14.1)。駒の価値が高い順。
+    """colorの駒(玉以外)への当たり一覧(§13.3, §14.1, §15.1)。駒の価値が高い順。
 
     colorを省略すると従来どおり手番側。ピンや取り合いの手順は考慮しない静的な
-    利き数。玉への当たり=王手はin_checkで報告する。
+    利き数。玉への当たり=王手はin_checkで報告する。盤上の利きに加え、相手の
+    持ち駒の歩による当たり(pawn_drop_risk)も判定する(§15.1)。
     """
     pieces = board.pieces
     own_color = board.turn if color is None else color
     opp_color = cshogi.WHITE if own_color == cshogi.BLACK else cshogi.BLACK
     own_is_white = own_color == cshogi.WHITE
+    hand_black, hand_white = board.pieces_in_hand
+    opp_pawn_count = (hand_black if opp_color == cshogi.BLACK else hand_white)[0]
 
     result = []
     for sq, code in enumerate(pieces):
@@ -258,17 +285,22 @@ def attacked_pieces(board: cshogi.Board, color: Optional[int] = None) -> list[di
         if piece_type == cshogi.KING:
             continue
         atk = attackers(pieces, opp_color, sq)
-        if not atk:
+        drop_risk = _pawn_drop_risk(pieces, opp_color, opp_pawn_count, sq)
+        if not atk and not drop_risk:
             continue
         defenders = attackers(pieces, own_color, sq)
-        cheapest = min(atk, key=lambda a: PIECE_VALUES[pieces[a] % _WHITE_OFFSET])
+        cheapest = (
+            PIECE_NAMES[pieces[min(atk, key=lambda a: PIECE_VALUES[pieces[a] % _WHITE_OFFSET])] % _WHITE_OFFSET]
+            if atk else None
+        )
         result.append({
             "square": square_name(sq),
             "piece": PIECE_NAMES[piece_type],
             "attackers": len(atk),
             "defenders": len(defenders),
             "hanging": not defenders,
-            "cheapest_attacker": PIECE_NAMES[pieces[cheapest] % _WHITE_OFFSET],
+            "cheapest_attacker": cheapest,
+            "pawn_drop_risk": drop_risk,
             "_value": PIECE_VALUES[piece_type],
         })
     result.sort(key=lambda e: -e["_value"])

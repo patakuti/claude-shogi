@@ -146,7 +146,7 @@ def test_attacked_pieces_lists_hanging_pieces():
     silver, pawn = result
     assert silver == {
         "square": "5五", "piece": "銀", "attackers": 1, "defenders": 0,
-        "hanging": True, "cheapest_attacker": "歩",
+        "hanging": True, "cheapest_attacker": "歩", "pawn_drop_risk": False,
     }
     assert pawn["piece"] == "歩"
     assert pawn["cheapest_attacker"] == "香"
@@ -182,6 +182,82 @@ def test_attacked_pieces_color_param_reports_other_side():
     white_side = analysis.attacked_pieces(board, color=cshogi.WHITE)
     assert [e["piece"] for e in black_side] == ["銀", "歩"]
     assert [e["square"] for e in white_side] == ["1四", "5四"]
+
+
+# --- pawn_drop_risk(§15.1: 歩打ちの当たり検知) --------------------------------
+
+# 先手銀5五(盤上の当たりなし)、後手が持ち駒に歩1枚。5四が空いているため打たれる。
+PAWN_DROP_RISK_SFEN = "4k4/9/9/9/4S4/9/9/9/4K4 b p 1"
+
+# 上と同型だが、5二に後手の不成の歩が既にある(二歩のため5四には打てない)。
+NIFU_BLOCKED_SFEN = "4k4/4p4/9/9/4S4/9/9/9/4K4 b p 1"
+
+# 上と同型だが、5四(打ち込み先)に後手の角があり空いていない。角は同じ筋を直射しない
+# ため5五の銀を攻撃せず、「空きマスでない」条件だけを二歩・当たりから独立に検証できる。
+OCCUPIED_ORIGIN_SFEN = "4k4/9/9/4b4/4S4/9/9/9/4K4 b p 1"
+
+
+def test_attacked_pieces_detects_pawn_drop_risk_with_no_board_attackers():
+    board = cshogi.Board()
+    board.set_sfen(PAWN_DROP_RISK_SFEN)
+    (entry,) = analysis.attacked_pieces(board, color=cshogi.BLACK)
+    assert entry["square"] == "5五"
+    assert entry["attackers"] == 0
+    assert entry["cheapest_attacker"] is None
+    assert entry["hanging"]
+    assert entry["pawn_drop_risk"]
+
+
+def test_attacked_pieces_pawn_drop_risk_blocked_by_nifu():
+    board = cshogi.Board()
+    board.set_sfen(NIFU_BLOCKED_SFEN)
+    assert analysis.attacked_pieces(board, color=cshogi.BLACK) == []
+
+
+def test_attacked_pieces_pawn_drop_risk_blocked_by_occupied_origin():
+    board = cshogi.Board()
+    board.set_sfen(OCCUPIED_ORIGIN_SFEN)
+    assert analysis.attacked_pieces(board, color=cshogi.BLACK) == []
+
+
+def test_attacked_pieces_pawn_drop_risk_false_without_pawn_in_hand():
+    # HANGING_SFENは持ち駒なし。盤上の当たりで一覧には載るが歩打ちの脅威はない。
+    board = cshogi.Board()
+    board.set_sfen(HANGING_SFEN)
+    silver, _pawn = analysis.attacked_pieces(board)
+    assert not silver["pawn_drop_risk"]
+
+
+def test_pawn_drop_risk_false_when_no_pawn_in_hand():
+    pieces = [0] * 81
+    assert not analysis._pawn_drop_risk(pieces, cshogi.BLACK, 0, 40)
+
+
+def test_pawn_drop_risk_true_on_empty_board_with_pawn_in_hand():
+    pieces = [0] * 81
+    assert analysis._pawn_drop_risk(pieces, cshogi.BLACK, 1, 40)
+
+
+def test_pawn_drop_risk_false_when_origin_off_board():
+    # 段(0始まり)8("九")の駒への先手の歩打ちは、打ち込み先が盤外(段9)になる。
+    pieces = [0] * 81
+    sq = 2 * 9 + 8
+    assert not analysis._pawn_drop_risk(pieces, cshogi.BLACK, 1, sq)
+
+
+def test_pawn_drop_risk_false_when_origin_occupied():
+    pieces = [0] * 81
+    sq = 4 * 9 + 4
+    origin_sq = 4 * 9 + 5  # 先手attacker: origin_rank = target_rank + 1
+    pieces[origin_sq] = cshogi.PAWN
+    assert not analysis._pawn_drop_risk(pieces, cshogi.BLACK, 1, sq)
+
+
+def test_pawn_drop_risk_false_when_nifu_on_file():
+    pieces = [0] * 81
+    sq = 4 * 9 + 4
+    pieces[4 * 9 + 0] = cshogi.PAWN  # 同じ筋(4)に先手の不成の歩が既にある
+    assert not analysis._pawn_drop_risk(pieces, cshogi.BLACK, 1, sq)
 
 
 # --- find_mate / find_mate_threat -------------------------------------------
