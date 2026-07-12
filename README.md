@@ -67,6 +67,12 @@ Claude思考モード用の解析ツール `analyze_position` / `verify_moves` /
 当たりに発展する脅威の一覧([{square, piece, patterns, example_move_usi}, ...]。
 パターンA〜Dは王手/紐なし駒への当たり/移動先の安全性の組み合わせ)。王手中や
 打ち込み自体が直接王手になる候補は対象外(§17.1)。
+`analyze_position`の`trapped_major_pieces`は、盤上に既にある相手の飛・角
+(成りを含む: 龍・馬)のうち、合法な移動先の全てに手番側の利きが及んでいて
+安全に逃げられない駒の一覧([{square, piece, legal_move_count}, ...]。
+合法な移動先が一つもない〈完全に動けない〉駒も`legal_move_count: 0`で含む)。
+打ち込み(持ち駒からの新規配置)は対象外、静的な利き数のみの判定でピンや
+取り合いの最終損得は考慮しない。王手中は空リスト(§18.1)。
 
 MCPサーバー起動時、`http://localhost:8765/` でGUI盤面(SVG)を配信するHTTPサーバーも
 常時待受する(標準ライブラリの`http.server`のみで実装、追加の外部依存なし)。ブラウザで
