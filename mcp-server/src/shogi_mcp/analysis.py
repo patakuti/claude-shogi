@@ -538,6 +538,20 @@ def analyze(board: cshogi.Board, mate_ply: int = 7, threat_ply: int = DEFAULT_MA
     }
 
 
+_MAJOR_PIECE_TYPES = frozenset(
+    {cshogi.ROOK, cshogi.BISHOP, cshogi.PROM_ROOK, cshogi.PROM_BISHOP}
+)
+
+
+def _captures_major_piece(moves: list[int]) -> bool:
+    """movesのいずれかで飛・角(成りを含む)が捕られていればTrue(§16.1)。"""
+    for m in moves:
+        cap = cshogi.move_cap(m)
+        if cap and (cap % _WHITE_OFFSET) in _MAJOR_PIECE_TYPES:
+            return True
+    return False
+
+
 def verify_moves(
     board: cshogi.Board,
     usi_moves: list[str],
@@ -555,6 +569,10 @@ def verify_moves(
     0(search_depth_completed == 0)ならmaterial_change/reply_pv_usiは
     信頼できる読みなしとして返す。
     destination/own_attacked_after(§14.3)はis_mateの候補には付けない。
+    major_piece_trade(§16.1)は「この手、または読み筋(pv)のどこかで飛・角
+    (成りを含む)が捕られるか」を示す真偽値。search_depth_completed == 0の
+    場合はpvが空のため候補手自体の捕り駒のみで判定する(読み筋側の将来の
+    大駒交換は検出できない)。局面フェーズ(序盤/中盤/終盤)の判定はしない。
     """
     results = []
     for usi in usi_moves:
@@ -586,6 +604,7 @@ def verify_moves(
             entry["allows_mate"] = None
             entry["material_change"] = 0
             entry["reply_pv_usi"] = []
+            entry["major_piece_trade"] = _captures_major_piece([move])
             results.append(entry)
             continue
 
@@ -616,6 +635,8 @@ def verify_moves(
         if completed_depth == 0:
             entry["material_change"] = None
             entry["reply_pv_usi"] = []
+            # pvが空(読み筋が信頼できない)なので候補手自体の捕り駒のみで判定する(§16.1)。
+            entry["major_piece_trade"] = _captures_major_piece([move])
         else:
             # PVを適用した局面の実材料点差からmaterial_changeを算出(§13.5)
             for m in pv:
@@ -626,6 +647,7 @@ def verify_moves(
             else:
                 entry["material_change"] = (end_white - end_black) - (base_white - base_black)
             entry["reply_pv_usi"] = [cshogi.move_to_usi(m) for m in pv]
+            entry["major_piece_trade"] = _captures_major_piece([move] + pv)
         results.append(entry)
     return results
 
