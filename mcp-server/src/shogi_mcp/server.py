@@ -374,6 +374,9 @@ def analyze_position() -> dict:
     相手の持ち駒の歩による当たりを示すpawn_drop_riskも含む、§15.1)を含む。
     王手中は詰めろ検出の代わりに全回避手を個別検証し、回避後も詰みが残らない手を返す
     (check_evasions.safe_usi。all_allow_mate=trueなら受けなし)。
+    major_piece_drop_threats(§17.1)は、自陣3段目以内の紐なしマスへの相手の飛・角の
+    安全な打ち込みが、成り込みと組み合わさって王手・両取り・安全な当たりに発展する
+    脅威の一覧([{square, piece, patterns, example_move_usi}, ...])。王手中は空リスト。
     """
     board = _board_snapshot()
     if board is None:

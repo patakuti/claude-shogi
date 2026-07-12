@@ -535,6 +535,7 @@ def analyze(board: cshogi.Board, mate_ply: int = 7, threat_ply: int = DEFAULT_MA
         "mate_threat_against_side_to_move": threat,
         "check_evasions": evasions,
         "attacked_pieces": attacked_pieces(copy),
+        "major_piece_drop_threats": major_piece_drop_threats(copy),
     }
 
 
@@ -666,6 +667,141 @@ def _unpromoted(piece_type: int) -> int:
     if piece_type == cshogi.PROM_ROOK:
         return cshogi.ROOK
     return piece_type
+
+
+# --- 大駒打ち込みの脅威検出(§17) --------------------------------------------
+
+_DROP_PIECE_TYPES = {cshogi.ROOK: "R", cshogi.BISHOP: "B"}
+
+
+def _usi_square(sq: int) -> str:
+    file_, rank = divmod(sq, 9)
+    return f"{file_ + 1}{chr(ord('a') + rank)}"
+
+
+def major_piece_drop_threats(board: cshogi.Board) -> list[dict]:
+    """自陣後方への安全な大駒打ち込みが、成り込みと組み合わさって王手・両取り・
+    安全な当たりに発展する脅威の一覧(§17.1)。boardは手番側(防御側)の局面。
+    盤面は変更しない。
+
+    「手番側が2手連続で何もしなかった」場合の脅威を、既存のfind_mate_threat
+    (§11.2)と同じくpush_passで仮定して検出する。王手中(push_passが使えない)と、
+    打ち込み自体が直接王手になる候補はこの関数の対象外(既存の王手検出・
+    回避検証の範疇)。
+    """
+    if board.is_check():
+        return []
+
+    copy = _copy_board(board)
+    own_color = copy.turn
+    opp_color = cshogi.WHITE if own_color == cshogi.BLACK else cshogi.BLACK
+    hand_black, hand_white = copy.pieces_in_hand
+    opp_hand = hand_black if opp_color == cshogi.BLACK else hand_white
+    drop_piece_types = []
+    if opp_hand[6] > 0:  # 飛
+        drop_piece_types.append(cshogi.ROOK)
+    if opp_hand[5] > 0:  # 角
+        drop_piece_types.append(cshogi.BISHOP)
+    if not drop_piece_types:
+        return []
+
+    pieces = copy.pieces
+    back_ranks = (6, 7, 8) if own_color == cshogi.BLACK else (0, 1, 2)
+    candidate_squares = [
+        sq for sq in range(81)
+        if pieces[sq] == 0 and sq % 9 in back_ranks and not attackers(pieces, own_color, sq)
+    ]
+
+    results = []
+    for sq in candidate_squares:
+        for piece_type in drop_piece_types:
+            entry = _check_drop_threat(copy, own_color, opp_color, sq, piece_type)
+            if entry is not None:
+                results.append(entry)
+    return results
+
+
+def _check_drop_threat(
+    copy: cshogi.Board, own_color: int, opp_color: int, sq: int, piece_type: int
+) -> Optional[dict]:
+    """1つの打ち込み候補(マス・駒種)を検証する。呼び出し後、copyは元の局面に復元される。"""
+    usi = f"{_DROP_PIECE_TYPES[piece_type]}*{_usi_square(sq)}"
+    copy.push_pass()
+    try:
+        move = copy.move_from_usi(usi)
+        if move == 0 or not copy.is_legal(move):
+            return None
+        copy.push(move)
+        try:
+            if copy.is_check():
+                return None  # 打ち込み自体が王手(既存の王手検出の範疇のため対象外)
+            copy.push_pass()
+            try:
+                return _find_followup_threat(copy, own_color, opp_color, sq, piece_type)
+            finally:
+                copy.pop_pass()
+        finally:
+            copy.pop()
+    finally:
+        copy.pop_pass()
+
+
+def _find_followup_threat(
+    copy: cshogi.Board, own_color: int, opp_color: int, sq: int, piece_type: int
+) -> Optional[dict]:
+    matched: set[str] = set()
+    example_move: Optional[int] = None
+    for followup in copy.legal_moves:
+        if cshogi.move_from(followup) != sq:
+            continue
+        copy.push(followup)
+        try:
+            patterns = _classify_followup(copy, own_color, opp_color, followup)
+        finally:
+            copy.pop()
+        if patterns:
+            matched.update(patterns)
+            if example_move is None:
+                example_move = followup
+    if not matched:
+        return None
+    return {
+        "square": square_name(sq),
+        "piece": PIECE_NAMES[piece_type],
+        "patterns": sorted(matched),
+        "example_move_usi": cshogi.move_to_usi(example_move),
+    }
+
+
+def _classify_followup(copy: cshogi.Board, own_color: int, opp_color: int, followup: int) -> list[str]:
+    """成り込んだ駒の追撃手1つを§17.1のパターンA〜Dに照らして判定する。"""
+    dest = cshogi.move_to(followup)
+    pieces_now = copy.pieces
+    gives_check = copy.is_check()
+    dest_safe = not attackers(pieces_now, own_color, dest)
+
+    hanging_count = 0
+    for tsq, code in enumerate(pieces_now):
+        if code == 0 or (code >= _WHITE_OFFSET) != (own_color == cshogi.WHITE):
+            continue
+        if code % _WHITE_OFFSET == cshogi.KING:
+            continue
+        if dest not in attackers(pieces_now, opp_color, tsq):
+            continue  # 今動いた駒自身の利きでなければ対象外
+        if attackers(pieces_now, own_color, tsq):
+            continue  # 紐が付いていれば対象外
+        hanging_count += 1
+
+    patterns = []
+    if gives_check and hanging_count:
+        patterns.append("A")
+    if gives_check and dest_safe:
+        patterns.append("B")
+    if not gives_check and hanging_count >= 2:
+        patterns.append("C")
+    if not gives_check and hanging_count and dest_safe:
+        patterns.append("D")
+    return patterns
 
 
 def simulate_line(board: cshogi.Board, usi_moves: list[str]) -> dict:
