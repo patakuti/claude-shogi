@@ -594,6 +594,136 @@ def test_major_piece_trade_true_when_candidate_captures_promoted_rook():
     assert entry["major_piece_trade"]
 
 
+# --- major_piece_drop_threats(§17.1, §17.3) ---------------------------------
+
+# パターンA(王手+紐なし駒への当たり)用: 先手玉9一、後手玉1九、後手持ち駒に飛。
+# 先手銀2八(紐なし)。▲飛打5八→(2手パス想定)→△5八9八+ が9一玉に王手をかけつつ
+# 5八8→2八ラインで銀にも当たる(直接の打ち込みは玉と同筋/同段でないため王手にならない)。
+DROP_THREAT_PATTERN_A_SFEN = "K8/9/9/9/9/9/9/7S1/8k b r 1"
+
+# パターンB(王手+安全な移動先)用: 紐なし駒を置かず、9一玉との整合だけを用意。
+DROP_THREAT_PATTERN_B_SFEN = "K8/9/9/9/9/9/9/9/8k b r 1"
+
+# パターンC(王手なし+紐なし駒を2つ同時に当てる=両取り)用: 先手銀5一(5八と同じ筋)・
+# 先手銀1五(5八からの移動先と同じ段になりうる)を用意。
+DROP_THREAT_PATTERN_C_SFEN = "K3S4/9/9/9/8S/9/9/9/8k b r 1"
+
+# パターンD(王手なし+紐なし駒への当たり+安全な移動先)用: 紐なし駒を1つだけ用意。
+DROP_THREAT_PATTERN_D_SFEN = "K8/9/9/9/8S/9/9/9/8k b r 1"
+
+# (e) 打ち込みマスに手番側の利きがある(先手金5九が5八を守る)→前提条件で除外。
+DROP_THREAT_DEFENDED_SQUARE_SFEN = "K8/9/9/9/9/9/9/9/4G3k b r 1"
+
+# (f)/そのほか: 玉の整合だけを持つ静かな盤面(打ち込みマス自体は個別に指定して使う)。
+DROP_THREAT_OPEN_SFEN = "K8/9/9/9/9/9/9/9/8k b r 1"
+
+# (h) 手番側(先手)が王手中 → push_pass不可のため空リスト。
+DROP_THREAT_IN_CHECK_SFEN = "4K4/9/4r4/9/9/9/9/9/k8 b r 1"
+
+# (i) 打ち込み自体が直接王手になる候補(先手玉5一と同じ筋の5八への飛打ち)。
+DROP_THREAT_DIRECT_CHECK_SFEN = "4K4/9/9/9/9/9/9/9/8k b r 1"
+
+# (j) 自陣3段目以内が自駒(銀)で完全に埋まっている→候補マスなし(持ち駒に飛はある)。
+DROP_THREAT_NO_CANDIDATES_SFEN = "K8/9/9/9/9/9/SSSSSSSSS/SSSSSSSSS/SSSSSSSSk b r 1"
+
+
+def test_major_piece_drop_threats_detects_pattern_a():
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_PATTERN_A_SFEN)
+    entry = analysis._check_drop_threat(board, cshogi.BLACK, cshogi.WHITE, _sq(5, 8), cshogi.ROOK)
+    assert entry is not None
+    assert entry["square"] == "5八"
+    assert entry["piece"] == "飛"
+    assert "A" in entry["patterns"]
+
+
+def test_major_piece_drop_threats_detects_pattern_b():
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_PATTERN_B_SFEN)
+    entry = analysis._check_drop_threat(board, cshogi.BLACK, cshogi.WHITE, _sq(5, 8), cshogi.ROOK)
+    assert entry is not None
+    assert entry["patterns"] == ["B"]  # 紐なし駒がないためA/C/Dは付かない
+
+
+def test_major_piece_drop_threats_detects_pattern_c():
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_PATTERN_C_SFEN)
+    entry = analysis._check_drop_threat(board, cshogi.BLACK, cshogi.WHITE, _sq(5, 8), cshogi.ROOK)
+    assert entry is not None
+    assert "C" in entry["patterns"]
+
+
+def test_major_piece_drop_threats_detects_pattern_d():
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_PATTERN_D_SFEN)
+    entry = analysis._check_drop_threat(board, cshogi.BLACK, cshogi.WHITE, _sq(5, 8), cshogi.ROOK)
+    assert entry is not None
+    assert "D" in entry["patterns"]
+
+
+def test_major_piece_drop_threats_excludes_defended_square():
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_DEFENDED_SQUARE_SFEN)
+    assert analysis.attackers(board.pieces, cshogi.BLACK, _sq(5, 8))  # 前提: 5八は紐あり
+    result = analysis.major_piece_drop_threats(board)
+    assert "5八" not in [e["square"] for e in result]
+
+
+def test_major_piece_drop_threats_excludes_square_before_third_rank():
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_OPEN_SFEN)
+    # 直接呼び出しでは5六(4段目)も脅威として成立することを確認したうえで、
+    # 全体スキャンでは対象外(自陣3段目=7-9段のみ走査)であることを確認する。
+    direct = analysis._check_drop_threat(board, cshogi.BLACK, cshogi.WHITE, _sq(5, 6), cshogi.ROOK)
+    assert direct is not None
+    result = analysis.major_piece_drop_threats(cshogi.Board(DROP_THREAT_OPEN_SFEN))
+    assert "5六" not in [e["square"] for e in result]
+    assert "5七" in [e["square"] for e in result]  # 7段目は対象内であることの対照確認
+
+
+def test_major_piece_drop_threats_empty_without_major_piece_in_hand():
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_OPEN_SFEN.replace(" r ", " - "))
+    assert analysis.major_piece_drop_threats(board) == []
+
+
+def test_major_piece_drop_threats_empty_while_in_check():
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_IN_CHECK_SFEN)
+    assert board.is_check()
+    assert analysis.major_piece_drop_threats(board) == []
+
+
+def test_major_piece_drop_threats_skips_candidate_that_is_itself_check():
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_DIRECT_CHECK_SFEN)
+    before = board.sfen()
+    entry = analysis._check_drop_threat(board, cshogi.BLACK, cshogi.WHITE, _sq(5, 8), cshogi.ROOK)
+    assert entry is None
+    assert board.sfen() == before  # push/popが対になっており盤面が復元されること
+
+
+def test_major_piece_drop_threats_empty_when_back_ranks_fully_occupied():
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_NO_CANDIDATES_SFEN)
+    assert analysis.major_piece_drop_threats(board) == []
+
+
+def test_major_piece_drop_threats_does_not_mutate_board():
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_PATTERN_A_SFEN)
+    before = board.sfen()
+    analysis.major_piece_drop_threats(board)
+    assert board.sfen() == before
+
+
+def test_analyze_includes_major_piece_drop_threats():
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_PATTERN_A_SFEN)
+    result = analysis.analyze(board)
+    assert any(e["square"] == "5八" for e in result["major_piece_drop_threats"])
+
+
 # --- simulate_line ----------------------------------------------------------
 
 
