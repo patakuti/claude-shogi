@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -220,6 +221,24 @@ def test_verify_moves_checks_candidates_without_moving():
     assert not bad_entry["legal"]
 
     assert server.get_state()["sfen"] == before
+
+
+def test_verify_moves_clamps_node_limit_to_safe_range():
+    server.new_game(difficulty=1, user_side="black", mode="brain")
+    captured = {}
+    original = server.analysis.verify_moves
+
+    def spy(board, moves, depth, node_limit):
+        captured["node_limit"] = node_limit
+        return original(board, moves, depth=depth, node_limit=node_limit)
+
+    with mock.patch.object(server.analysis, "verify_moves", side_effect=spy):
+        server.verify_moves(["7g7f"], node_limit=1)
+        assert captured["node_limit"] == 1_000
+        server.verify_moves(["7g7f"], node_limit=10_000_000)
+        assert captured["node_limit"] == 300_000
+        server.verify_moves(["7g7f"], node_limit=50_000)
+        assert captured["node_limit"] == 50_000
 
 
 def test_simulate_line_does_not_touch_real_board():

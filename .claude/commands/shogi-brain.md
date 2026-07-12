@@ -40,6 +40,10 @@ argument-hint: [difficulty 1-5] [user_side black|white]
      (`cheapest_attacker`が当たられた駒より安い)があれば、その駒の処置
      (逃げる・紐を付ける・取り返しの勘定・カウンター)を候補手に必ず含める。
      当たりの見落としはこのモードの典型的な敗因パターン。
+   - `pawn_drop_risk: true` が付いた駒は、盤上の利き(`attackers`)が0でも**放置しない**。
+     相手の持ち駒に歩がある間は継続する脅威として扱い、紐を足す・駒を動かす・
+     歩を打たれても損がない配置にするなどの対応を検討する
+     (盤上の駒同士の利きだけでは見えない、持ち駒からの当たりの機械検知)。
    - `apply_move`/`engine_move`の応答に含まれる`attack_report`(`user_pieces`/
      `engine_pieces`)は**毎手番、`analyze_position`を呼ぶ前でも必ず目を通す**。
      `user_pieces`に載った駒は、解消済みと確認できるまで(逃げた・紐が付いた・
@@ -47,6 +51,7 @@ argument-hint: [difficulty 1-5] [user_side black|white]
      王手の応酬を挟んだ数手後の静かな手で失念して駒を取られるのが典型的な事故
      パターンであり、`attack_report`はその再発防止のために毎手表示される。
      `engine_pieces`の`hanging: true`はタダ取りの機会として候補手に含める。
+     いずれの一覧でも`pawn_drop_risk: true`は上記と同様、盤上の利きがなくても放置しない。
 3. それ以外は自分で方針を立て、候補手を3〜5手選んで `verify_moves(moves)` にかける。
    - `allows_mate` が付いた手は**指さない**(頓死)。
    - 打ち込み・移動の候補は`destination`(移動先マスへの利き)を必ず確認する。
@@ -56,6 +61,12 @@ argument-hint: [difficulty 1-5] [user_side black|white]
      読み筋どおりの結果局面になることを確認してからにする。
      `own_attacked_after`(着手直後の自駒への当たり上位5件)もあわせて見て、
      その手が自駒の当たりを解消したか・新たに生んだかを比較する。
+   - **同じマスを複数の駒で取れる場面では、「安い駒で取る」だけで即決しない。**
+     取り方によって残り駒の配置が変わり、動かさなかった駒に`attackers > 0`や
+     `pawn_drop_risk: true`が残ることがある(駒得は同じでも安全度が違う)。
+     候補が複数あるときは必ず`verify_moves`に全て並べて`own_attacked_after`を比較し、
+     警告(当たり・`pawn_drop_risk`)がより多く解消される取り方を優先する。
+     「駒を動かさずに済ませる=温存」とは限らない。
    - `material_change` が大きく負(目安: -300以下)の手は原則捨てる。
      意図的な駒捨て(手筋)として指したい場合は、`simulate_line` で狙いの手順を検証し、
      読み筋どおりの結果局面になることを確認してからにする。
@@ -63,6 +74,11 @@ argument-hint: [difficulty 1-5] [user_side black|white]
      `reply_pv_usi`)を判断材料にしない(信頼できる読みが得られなかった合図)。
      `search_truncated: true`でも`search_depth_completed >= 2`なら
      「浅いが正確な読み」として扱ってよい。
+   - 持ち駒が多く合法手(特に打ち込み)が多い複雑な局面で`search_depth_completed`が
+     0〜1の候補ばかり並ぶときは、方針を左右する重要な一手を決める前に限り、
+     `verify_moves`の`node_limit`引数を通常(既定5万)より大きく(目安: 15万〜30万)
+     指定して再検証してよい。応答時間は伸びるが、より信頼できる読みが得られる
+     (中盤の判断精度を優先する意図的なトレードオフ)。
    - `reply_pv_usi`(相手の最善応手の読み筋)を見て、狙いが成立しているか判断する。
 4. 数手先を読んで指したいときは `simulate_line` で読み筋を盤に適用し、結果局面
    (盤面・材料点変化・王手の有無)を確認する。脳内で盤面を進めない(ズレるため)。

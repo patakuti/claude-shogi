@@ -370,7 +370,8 @@ def analyze_position() -> dict:
 
     駒割り(material)・持ち駒(hands)・手番側から相手玉への詰み(mate_for_side_to_move)・
     手番側が放置した場合に相手から詰まされるか=詰めろ(mate_threat_against_side_to_move)・
-    手番側の駒への当たり一覧(attacked_pieces。相手の利き数/味方の紐の数/浮き駒かどうか)を含む。
+    手番側の駒への当たり一覧(attacked_pieces。相手の利き数/味方の紐の数/浮き駒かどうか。
+    相手の持ち駒の歩による当たりを示すpawn_drop_riskも含む、§15.1)を含む。
     王手中は詰めろ検出の代わりに全回避手を個別検証し、回避後も詰みが残らない手を返す
     (check_evasions.safe_usi。all_allow_mate=trueなら受けなし)。
     """
@@ -383,18 +384,26 @@ def analyze_position() -> dict:
 
 
 @mcp.tool()
-def verify_moves(moves: list[str], depth: int = analysis.DEFAULT_SEARCH_DEPTH) -> dict:
+def verify_moves(
+    moves: list[str],
+    depth: int = analysis.DEFAULT_SEARCH_DEPTH,
+    node_limit: int = analysis.DEFAULT_NODE_LIMIT,
+) -> dict:
     """候補手(USI表記、最大10件)を機械検証する(盤面は変更しない)。Claude思考モード用。
 
     各候補について、legal(合法か)・is_mate(相手玉が即詰みか)・gives_check(王手か)・
     allows_mate(指した後に相手から自玉への詰みが生じるか=頓死チェック)・
     destination(移動先/打ち込み先マスへの相手の利き数opponent_effectsと味方の紐数
     own_supports。opponent_effects>0かつown_supports==0はタダ捨ての警告)・
-    own_attacked_after(着手直後の自駒への当たり上位5件。§13.3のattacked_pieces形式)・
+    own_attacked_after(着手直後の自駒への当たり上位5件。§13.3のattacked_pieces形式。
+    盤上の利きに加え、相手の持ち駒の歩による当たりも`pawn_drop_risk`で示す。§15.1)・
     search_depth_completed(反復深化で完了した深さ。0なら信頼できる読みなし)・
     material_change(双方が材料点上の最善を尽くした場合の材料点差の変化。負なら駒損。
     search_depth_completed==0のときはnull)・reply_pv_usi(その読み筋)を返す。
     destination/own_attacked_afterはis_mateの候補には付けない。
+    node_limit(§15.2): 候補ごとの探索ノード予算。既定値は数秒以内の応答を保証する
+    従来値のまま。合法手が多く読みが浅くなりがちな複雑な局面で、重要な判断の前だけ
+    大きく指定すると、より完了率の高い(信頼できる)読みが得られる(応答時間とのトレードオフ)。
     """
     board = _board_snapshot()
     if board is None:
@@ -402,7 +411,8 @@ def verify_moves(moves: list[str], depth: int = analysis.DEFAULT_SEARCH_DEPTH) -
     if not moves:
         return {"ok": False, "error": "no_moves_given"}
     depth = max(1, min(4, depth))
-    results = analysis.verify_moves(board, moves[:10], depth=depth)
+    node_limit = max(1_000, min(300_000, node_limit))
+    results = analysis.verify_moves(board, moves[:10], depth=depth, node_limit=node_limit)
     return {"ok": True, "results": results}
 
 
