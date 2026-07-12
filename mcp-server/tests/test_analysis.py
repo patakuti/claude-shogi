@@ -60,6 +60,21 @@ UNDEFENDED_DROP_SFEN = "4k4/9/9/9/9/9/3+b5/9/4K4 b N 1"
 # 上と同型だが、先手金3三が3四に紐を付けている(own_supports==1になること)。
 DEFENDED_DROP_SFEN = "4k4/9/6G2/9/9/9/3+b5/9/4K4 b N 1"
 
+# major_piece_trade(§16.1)検証用 -------------------------------------------
+
+# 大駒・小駒を含まない静かな手: 候補も読み筋も大駒に一切触れない。
+QUIET_NO_MAJOR_PIECE_SFEN = "4k4/9/9/9/4P4/9/9/9/4K4 b - 1"
+
+# 候補手自体が後手飛を直取り(5五飛→5三)。
+CAPTURE_ROOK_SFEN = "4k4/9/4r4/9/4R4/9/9/9/4K4 b - 1"
+
+# 候補手自体は捕らないが(9七歩→9六歩の静かな手)、直後の後手番で
+# 後手飛1三が無防備な先手飛1五を1三→1五で直取りできる(読み筋側で検出)。
+PV_CAPTURES_OWN_ROOK_SFEN = "4k4/9/8r/9/8R/9/P8/9/4K4 b - 1"
+
+# 候補手自体が後手の龍(成駒)を直取り(5五飛→5三)。
+CAPTURE_DRAGON_SFEN = "4k4/9/4+r4/9/4R4/9/9/9/4K4 b - 1"
+
 
 # --- material ---------------------------------------------------------------
 
@@ -523,6 +538,60 @@ def test_verify_moves_reports_zero_search_depth_completed_on_tiny_budget():
     assert entry["search_truncated"]
     assert entry["material_change"] is None
     assert entry["reply_pv_usi"] == []
+
+
+# --- major_piece_trade(§16.1, §16.3) -----------------------------------------
+
+
+def test_major_piece_trade_true_when_candidate_captures_rook():
+    board = cshogi.Board()
+    board.set_sfen(CAPTURE_ROOK_SFEN)
+    (entry,) = analysis.verify_moves(board, ["5e5c"])
+    assert entry["captures"] == "飛"
+    assert entry["major_piece_trade"]
+
+
+def test_major_piece_trade_false_on_quiet_move_without_major_pieces():
+    board = cshogi.Board()
+    board.set_sfen(QUIET_NO_MAJOR_PIECE_SFEN)
+    (entry,) = analysis.verify_moves(board, ["5e5d"])
+    assert entry["captures"] is None
+    assert not entry["major_piece_trade"]
+
+
+def test_major_piece_trade_true_when_own_rook_is_captured_in_pv():
+    board = cshogi.Board()
+    board.set_sfen(PV_CAPTURES_OWN_ROOK_SFEN)
+    (entry,) = analysis.verify_moves(board, ["9g9f"])
+    assert entry["captures"] is None  # 候補手自体は捕り駒なし
+    assert entry["search_depth_completed"] > 0
+    assert entry["reply_pv_usi"]
+    assert entry["major_piece_trade"]  # 読み筋の中で自分の飛が捕られる
+
+
+def test_major_piece_trade_false_on_mate_move_without_major_capture():
+    board = cshogi.Board()
+    board.set_sfen(MATE_IN_1_SFEN)
+    (entry,) = analysis.verify_moves(board, ["G*5b"])
+    assert entry["is_mate"]
+    assert entry["reply_pv_usi"] == []
+    assert not entry["major_piece_trade"]
+
+
+def test_major_piece_trade_false_on_zero_depth_when_candidate_has_no_capture():
+    board = cshogi.Board()
+    board.set_sfen(KING_EXPOSED_SFEN)
+    (entry,) = analysis.verify_moves(board, ["5i5h"], node_limit=1)
+    assert entry["search_depth_completed"] == 0
+    assert not entry["major_piece_trade"]
+
+
+def test_major_piece_trade_true_when_candidate_captures_promoted_rook():
+    board = cshogi.Board()
+    board.set_sfen(CAPTURE_DRAGON_SFEN)
+    (entry,) = analysis.verify_moves(board, ["5e5c"])
+    assert entry["captures"] == "飛"  # 龍は不成の飛として持ち駒に入る(既存仕様)
+    assert entry["major_piece_trade"]
 
 
 # --- simulate_line ----------------------------------------------------------
