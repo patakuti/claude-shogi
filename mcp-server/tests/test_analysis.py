@@ -724,6 +724,102 @@ def test_analyze_includes_major_piece_drop_threats():
     assert any(e["square"] == "5八" for e in result["major_piece_drop_threats"])
 
 
+# --- trapped_major_pieces(§18.1, §18.3) --------------------------------------
+
+# (a) games/2026-07-12_181507.kif、26手目(３七角打)の直後に２九飛(2h2i)を指した
+# 局面の再現。角(3七)の合法な移動先6通り(1i/2f/2h/4f/4h/5i、成りを含め全6通り)
+# 全てに手番側(先手)の利きが及んでおり、退避できない(実際の対局はこの手を候補に
+# 含めず、より損な１八飛を選んで後に敗着となった)。
+# trapped_major_pieces(board)はboard.turnを「攻撃側(own_color)」として扱うため、
+# 2h2iを指した直後の実局面(手番は後手)そのままでは攻撃側/被害側が逆になり、
+# 後手の角ではなく先手の飛が判定対象になってしまう。本関数は「攻撃側が実際に
+# 指せる相手の合法手」をpush_passで1手先読みする設計(既存のmajor_piece_drop_threats
+# と同じ)のため、駒の配置は2h2iを指した直後のまま、手番だけを先手に戻して
+# 再現する(先手が何もしない=push_passと仮定した場合の後手の実際の合法手を見る)。
+TRAPPED_BISHOP_SFEN = (
+    "ln1g3nl/1r3kgs1/1ppspp1p1/p2p2p2/7Np/2P2PPP1/PPSPPSb1P/2GK5/LN3G1RL b B 28"
+)
+
+# (e)(f)(g) 白の馬(成角)を9一の隅に置き、8一・9二・8二を白の銀で塞いで
+# 合法な移動先を0にした盤面(完全に動けない駒)。(f)用に、同じ構図を先後反転した
+# 盤面(手番側自身の馬)も用意する。
+TRAPPED_PROMOTED_ZERO_MOVES_SFEN = "+bs7/ss7/9/9/9/9/9/9/K7k b - 1"
+TRAPPED_OWN_PROMOTED_NOT_TARGETED_SFEN = "+Bs7/ss7/9/9/9/9/9/9/K7k b - 1"
+
+# (d) 相手(後手)が飛・角(成りを含む)を盤上に一つも持たない盤面。
+TRAPPED_NO_MAJOR_PIECE_SFEN = "K8/9/9/9/9/9/9/9/8k b - 1"
+
+# (c) 手番側(先手)が王手中の盤面(major_piece_drop_threatsの制約と共通)。
+TRAPPED_IN_CHECK_SFEN = "4K4/9/4r4/9/9/9/9/9/k8 b r 1"
+
+
+def test_trapped_major_pieces_detects_cornered_bishop():
+    board = cshogi.Board()
+    board.set_sfen(TRAPPED_BISHOP_SFEN)
+    result = analysis.trapped_major_pieces(board)
+    entry = next((e for e in result if e["square"] == "3七"), None)
+    assert entry is not None
+    assert entry["piece"] == "角"
+
+
+def test_trapped_major_pieces_excludes_piece_with_safe_escape():
+    # 同じ盤面の後手飛車(8二)は退避先(5二・6二・7二・9二)に手番側の利きがなく、
+    # 安全に逃げられるため対象外。
+    board = cshogi.Board()
+    board.set_sfen(TRAPPED_BISHOP_SFEN)
+    result = analysis.trapped_major_pieces(board)
+    assert "8二" not in [e["square"] for e in result]
+
+
+def test_trapped_major_pieces_empty_while_in_check():
+    board = cshogi.Board()
+    board.set_sfen(TRAPPED_IN_CHECK_SFEN)
+    assert board.is_check()
+    assert analysis.trapped_major_pieces(board) == []
+
+
+def test_trapped_major_pieces_empty_without_opponent_major_piece():
+    board = cshogi.Board()
+    board.set_sfen(TRAPPED_NO_MAJOR_PIECE_SFEN)
+    assert analysis.trapped_major_pieces(board) == []
+
+
+def test_trapped_major_pieces_includes_promoted_piece():
+    board = cshogi.Board()
+    board.set_sfen(TRAPPED_PROMOTED_ZERO_MOVES_SFEN)
+    result = analysis.trapped_major_pieces(board)
+    assert any(e["piece"] == "馬" for e in result)
+
+
+def test_trapped_major_pieces_excludes_own_side_piece():
+    board = cshogi.Board()
+    board.set_sfen(TRAPPED_OWN_PROMOTED_NOT_TARGETED_SFEN)
+    assert analysis.trapped_major_pieces(board) == []
+
+
+def test_trapped_major_pieces_reports_zero_legal_moves_for_fully_boxed_piece():
+    board = cshogi.Board()
+    board.set_sfen(TRAPPED_PROMOTED_ZERO_MOVES_SFEN)
+    result = analysis.trapped_major_pieces(board)
+    entry = next(e for e in result if e["square"] == "9一")
+    assert entry["legal_move_count"] == 0
+
+
+def test_trapped_major_pieces_does_not_mutate_board():
+    board = cshogi.Board()
+    board.set_sfen(TRAPPED_BISHOP_SFEN)
+    before = board.sfen()
+    analysis.trapped_major_pieces(board)
+    assert board.sfen() == before
+
+
+def test_analyze_includes_trapped_major_pieces():
+    board = cshogi.Board()
+    board.set_sfen(TRAPPED_BISHOP_SFEN)
+    result = analysis.analyze(board)
+    assert any(e["square"] == "3七" for e in result["trapped_major_pieces"])
+
+
 # --- simulate_line ----------------------------------------------------------
 
 

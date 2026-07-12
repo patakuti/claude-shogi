@@ -377,6 +377,12 @@ def analyze_position() -> dict:
     major_piece_drop_threats(§17.1)は、自陣3段目以内の紐なしマスへの相手の飛・角の
     安全な打ち込みが、成り込みと組み合わさって王手・両取り・安全な当たりに発展する
     脅威の一覧([{square, piece, patterns, example_move_usi}, ...])。王手中は空リスト。
+    trapped_major_pieces(§18.1)は、盤上に既にある相手の飛・角(成りを含む: 龍・馬)の
+    うち、合法な移動先の全てに手番側の利きが及んでいて安全に逃げられない駒の一覧
+    ([{square, piece, legal_move_count}, ...])。合法な移動先が一つもない(完全に
+    動けない)駒はlegal_move_count: 0で含まれる。打ち込み(持ち駒からの新規配置)は
+    対象外。静的な利き数のみの判定でピンや取り合いの最終損得は考慮しない。王手中は
+    空リスト。
     """
     board = _board_snapshot()
     if board is None:

@@ -49,6 +49,10 @@ argument-hint: [difficulty 1-5] [user_side black|white]
      安全な当たりに発展する脅威(該当マス・駒種・パターンA〜D)を示す。
      該当マスに紐を付ける・空きマスを埋める・関係する自駒を動かすなどの
      対応を候補手に含めるか検討する(対応の判断自体はツール側では行わない)。
+   - `trapped_major_pieces` が空でなければ、該当する相手の飛・角(成りを含む:
+     龍・馬)に利きを足す手を優先的に候補手に含めて検討する。合法な移動先の
+     全てに自分の駒の利きが及んでいて安全に逃げられない(捕獲確定)状態を示す。
+     ピンや取り合いの最終損得までは考慮しない機械判定であることに留意する。
    - `apply_move`/`engine_move`の応答に含まれる`attack_report`(`user_pieces`/
      `engine_pieces`)は**毎手番、`analyze_position`を呼ぶ前でも必ず目を通す**。
      `user_pieces`に載った駒は、解消済みと確認できるまで(逃げた・紐が付いた・
@@ -58,6 +62,11 @@ argument-hint: [difficulty 1-5] [user_side black|white]
      `engine_pieces`の`hanging: true`はタダ取りの機会として候補手に含める。
      いずれの一覧でも`pawn_drop_risk: true`は上記と同様、盤上の利きがなくても放置しない。
 3. それ以外は自分で方針を立て、候補手を3〜5手選んで `verify_moves(moves)` にかける。
+   - **自分の駒が当たられて退避する場面では、`get_state()`の`legal_moves`から
+     その駒の移動先を全てフィルタして`verify_moves`に渡す**。主観的に絞った
+     一部の退避先だけを比較しない(網羅せずに一部だけ比較したことで、実は
+     最善だった退避先を候補から漏らし、駒が捕獲確定〈`trapped_major_pieces`〉
+     になる手を見落とした実例がある)。
    - `allows_mate` が付いた手は**指さない**(頓死)。
    - 打ち込み・移動の候補は`destination`(移動先マスへの利き)を必ず確認する。
      `opponent_effects > own_supports`(相手の利きが味方の紐より多い、特に

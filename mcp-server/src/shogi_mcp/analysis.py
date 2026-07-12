@@ -536,6 +536,7 @@ def analyze(board: cshogi.Board, mate_ply: int = 7, threat_ply: int = DEFAULT_MA
         "check_evasions": evasions,
         "attacked_pieces": attacked_pieces(copy),
         "major_piece_drop_threats": major_piece_drop_threats(copy),
+        "trapped_major_pieces": trapped_major_pieces(copy),
     }
 
 
@@ -802,6 +803,64 @@ def _classify_followup(copy: cshogi.Board, own_color: int, opp_color: int, follo
     if not gives_check and hanging_count and dest_safe:
         patterns.append("D")
     return patterns
+
+
+# --- 大駒の捕獲判定・トラップ検出(§18) ---------------------------------------
+
+
+def trapped_major_pieces(board: cshogi.Board) -> list[dict]:
+    """相手の飛・角(成りを含む: 龍・馬)のうち、盤上の合法な移動先の全てに
+    手番側の利きが及んでいて安全に逃げられない駒の一覧(§18.1)。boardは
+    手番側(攻撃側)の局面。盤面は変更しない。
+
+    既存のmajor_piece_drop_threatsと同じくpush_passで「相手が実際に指せる
+    合法手」を仮定して評価する。打ち込み(持ち駒からの新規配置)は対象外
+    (§17のmajor_piece_drop_threatsの範疇)で、盤上に既にある大駒の移動可能性
+    のみを判定する。静的な利き数のみで判定するため、ピンや複数回の取り合いの
+    最終損得は考慮しない(§13.3の限界を踏襲する既知の制約)。
+    """
+    if board.is_check():
+        return []
+
+    own_color = board.turn
+    opp_color = cshogi.WHITE if own_color == cshogi.BLACK else cshogi.BLACK
+    copy = _copy_board(board)
+    pieces = copy.pieces
+    opp_is_white = opp_color == cshogi.WHITE
+    targets = [
+        sq for sq, code in enumerate(pieces)
+        if code and (code >= _WHITE_OFFSET) == opp_is_white
+        and (code % _WHITE_OFFSET) in _MAJOR_PIECE_TYPES
+    ]
+    if not targets:
+        return []
+
+    results = []
+    copy.push_pass()
+    try:
+        for sq in targets:
+            moves = [m for m in copy.legal_moves if cshogi.move_from(m) == sq]
+            if any(_escapes_safely(copy, own_color, m) for m in moves):
+                continue
+            piece_type = pieces[sq] % _WHITE_OFFSET
+            results.append({
+                "square": square_name(sq),
+                "piece": PIECE_NAMES[piece_type],
+                "legal_move_count": len(moves),
+            })
+    finally:
+        copy.pop_pass()
+    return results
+
+
+def _escapes_safely(copy: cshogi.Board, own_color: int, move: int) -> bool:
+    """moveを実際に指した後、その移動先に手番側の利きが無ければ安全な退避。"""
+    dest = cshogi.move_to(move)
+    copy.push(move)
+    try:
+        return not attackers(copy.pieces, own_color, dest)
+    finally:
+        copy.pop()
 
 
 def simulate_line(board: cshogi.Board, usi_moves: list[str]) -> dict:
