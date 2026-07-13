@@ -54,7 +54,11 @@ Claude思考モード用の解析ツール `analyze_position` / `verify_moves` /
 `attacked_pieces`(および`attack_report`/`own_attacked_after`)の各駒には
 `pawn_drop_risk`(相手の持ち駒の歩を打って当てられるか。二歩・盤端・打ち込み先の
 空き状況を考慮)も含む。盤上の利きが0でも`pawn_drop_risk: true`なら見落とし
-やすい脅威として扱う(§15.1)。`verify_moves`ツールは`node_limit`引数
+やすい脅威として扱う(§15.1)。
+同じく各駒には`king_only_defense`(紐が1つ以上あり、かつその全てが自玉で
+あるか)も含む。実際に取り返すと玉自身が危険な位置に出る特殊なケースであり、
+`hanging`(紐なし)と同様に実質的な無防備として扱うべきだが、玉が動いた後の
+実際の安全性までは判定しない(§19.1)。`verify_moves`ツールは`node_limit`引数
 (既定5万、範囲1,000〜300,000)を受け付け、合法手が多く読みが浅くなりがちな
 複雑な局面で、呼び出し側が探索予算を増やして深い検証を要求できる(§15.2)。
 `verify_moves`の各候補には`major_piece_trade`(この手、または読み筋のどこかで

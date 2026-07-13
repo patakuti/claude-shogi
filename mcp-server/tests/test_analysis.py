@@ -60,6 +60,10 @@ UNDEFENDED_DROP_SFEN = "4k4/9/9/9/9/9/3+b5/9/4K4 b N 1"
 # 上と同型だが、先手金3三が3四に紐を付けている(own_supports==1になること)。
 DEFENDED_DROP_SFEN = "4k4/9/6G2/9/9/9/3+b5/9/4K4 b N 1"
 
+# king_only_defense(§19.4(e))検証用: 上と同型だが、玉が4四にいて3四に紐を
+# 付けている(玉のみが紐であること)。
+KING_ONLY_DEFENSE_DROP_SFEN = "4k4/9/9/5K3/9/9/3+b5/9/9 b N 1"
+
 # major_piece_trade(§16.1)検証用 -------------------------------------------
 
 # 大駒・小駒を含まない静かな手: 候補も読み筋も大駒に一切触れない。
@@ -161,7 +165,8 @@ def test_attacked_pieces_lists_hanging_pieces():
     silver, pawn = result
     assert silver == {
         "square": "5五", "piece": "銀", "attackers": 1, "defenders": 0,
-        "hanging": True, "cheapest_attacker": "歩", "pawn_drop_risk": False,
+        "hanging": True, "king_only_defense": False,
+        "cheapest_attacker": "歩", "pawn_drop_risk": False,
     }
     assert pawn["piece"] == "歩"
     assert pawn["cheapest_attacker"] == "香"
@@ -186,6 +191,48 @@ def test_attacked_pieces_color_param_defaults_to_side_to_move():
     board = cshogi.Board()
     board.set_sfen(HANGING_SFEN)
     assert analysis.attacked_pieces(board, color=cshogi.BLACK) == analysis.attacked_pieces(board)
+
+
+def test_attacked_pieces_king_only_defense_true():
+    # (a) games/2026-07-13_064822.kif、14手目(６五桂、7c6e)の直後の局面の再現。
+    # 5七の歩は桂の当たりを受けており、紐は自玉(5八)のみ。
+    board = cshogi.Board()
+    board.set_sfen(
+        "l1sg1gsnl/1r4kb1/pp2pp1pp/2pp2p2/3n3P1/2P6/PPBPPPP1P/2SK3R1/LNG2GSNL b - 15"
+    )
+    pawn = next(e for e in analysis.attacked_pieces(board) if e["square"] == "5七")
+    assert pawn["defenders"] == 1
+    assert pawn["king_only_defense"]
+
+
+def test_attacked_pieces_king_only_defense_false_when_defender_is_not_king():
+    # (b) DEFENDED_SFEN: 5五の銀は金5六の紐のみ(玉は無関係)。
+    board = cshogi.Board()
+    board.set_sfen(DEFENDED_SFEN)
+    (entry,) = analysis.attacked_pieces(board)
+    assert entry["defenders"] == 1
+    assert not entry["king_only_defense"]
+
+
+# (c) 5五の銀を玉(4六)と金(5六)の両方が守る形。全てが玉ではないためfalse。
+KING_ADJACENT_DEFENSE_SFEN = "4k4/9/9/4p4/4S4/4GK3/9/9/9 b - 1"
+
+
+def test_attacked_pieces_king_only_defense_false_when_king_and_other_piece_defend():
+    board = cshogi.Board()
+    board.set_sfen(KING_ADJACENT_DEFENSE_SFEN)
+    (entry,) = analysis.attacked_pieces(board)
+    assert entry["defenders"] == 2
+    assert not entry["king_only_defense"]
+
+
+def test_attacked_pieces_king_only_defense_false_when_hanging():
+    # (d) HANGING_SFEN: 紐なし(hanging: True)の駒はking_only_defenseも排他的にFalse。
+    board = cshogi.Board()
+    board.set_sfen(HANGING_SFEN)
+    silver, pawn = analysis.attacked_pieces(board)
+    assert silver["hanging"] and not silver["king_only_defense"]
+    assert pawn["hanging"] and not pawn["king_only_defense"]
 
 
 def test_attacked_pieces_color_param_reports_other_side():
@@ -517,6 +564,15 @@ def test_verify_moves_defended_drop_has_own_support():
     (entry,) = analysis.verify_moves(board, ["N*3d"])
     assert entry["destination"] == {"square": "3四", "opponent_effects": 1, "own_supports": 1}
     assert not entry["own_attacked_after"][0]["hanging"]
+
+
+def test_verify_moves_own_attacked_after_reflects_king_only_defense():
+    # (e) verify_movesのown_attacked_afterも共通関数(attacked_pieces)を経由するため
+    # king_only_defenseが反映されること。
+    board = cshogi.Board()
+    board.set_sfen(KING_ONLY_DEFENSE_DROP_SFEN)
+    (entry,) = analysis.verify_moves(board, ["N*3d"])
+    assert entry["own_attacked_after"][0]["king_only_defense"]
 
 
 def test_verify_moves_is_mate_candidate_has_no_destination():

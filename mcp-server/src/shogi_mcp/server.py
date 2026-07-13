@@ -238,7 +238,8 @@ def apply_move(move: str, comment: str = "") -> dict:
     commentが非空なら、この手へのコメント(狙い・読みなど)としてKIFに記録する
     (KIF標準の`*`コメント行。振り返り再生 http://localhost:8765/replay で表示される)。
     応答にはattack_report(§14.2。user_pieces=放置すると取られる警告、
-    engine_pieces=取れる駒の機会)を毎回含む。
+    engine_pieces=取れる駒の機会。king_only_defense=紐が玉のみであることを示す、
+    §19.1)を毎回含む。
     """
     session = _current_session()
     if session is None:
@@ -268,7 +269,8 @@ def engine_move(byoyomi_ms: int = 0) -> dict:
 
     byoyomi_ms=0の場合は現在の難易度プリセットの秒読みを使う。
     応答にはattack_report(§14.2。user_pieces=放置すると取られる警告、
-    engine_pieces=取れる駒の機会)を毎回含む。
+    engine_pieces=取れる駒の機会。king_only_defense=紐が玉のみであることを示す、
+    §19.1)を毎回含む。
     """
     session = _current_session()
     if session is None:
@@ -372,6 +374,9 @@ def analyze_position() -> dict:
     手番側が放置した場合に相手から詰まされるか=詰めろ(mate_threat_against_side_to_move)・
     手番側の駒への当たり一覧(attacked_pieces。相手の利き数/味方の紐の数/浮き駒かどうか。
     相手の持ち駒の歩による当たりを示すpawn_drop_riskも含む、§15.1)を含む。
+    king_only_defense(§19.1)は、紐が1つ以上あり、かつその全てが自玉である場合に
+    true。実際に取り返すと玉自身が危険になる特殊なケースで、hanging(紐なし)と同様に
+    実質的な無防備として扱うべき(hangingとは排他)。
     王手中は詰めろ検出の代わりに全回避手を個別検証し、回避後も詰みが残らない手を返す
     (check_evasions.safe_usi。all_allow_mate=trueなら受けなし)。
     major_piece_drop_threats(§17.1)は、自陣3段目以内の紐なしマスへの相手の飛・角の
@@ -405,7 +410,8 @@ def verify_moves(
     destination(移動先/打ち込み先マスへの相手の利き数opponent_effectsと味方の紐数
     own_supports。opponent_effects>0かつown_supports==0はタダ捨ての警告)・
     own_attacked_after(着手直後の自駒への当たり上位5件。§13.3のattacked_pieces形式。
-    盤上の利きに加え、相手の持ち駒の歩による当たりも`pawn_drop_risk`で示す。§15.1)・
+    盤上の利きに加え、相手の持ち駒の歩による当たりも`pawn_drop_risk`で示す。§15.1。
+    king_only_defenseは紐が玉のみであることを示す、§19.1)・
     search_depth_completed(反復深化で完了した深さ。0なら信頼できる読みなし)・
     material_change(双方が材料点上の最善を尽くした場合の材料点差の変化。負なら駒損。
     search_depth_completed==0のときはnull)・reply_pv_usi(その読み筋)を返す。
