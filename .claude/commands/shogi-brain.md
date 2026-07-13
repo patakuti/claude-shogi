@@ -57,6 +57,9 @@ argument-hint: [difficulty 1-5] [user_side black|white]
      龍・馬)に利きを足す手を優先的に候補手に含めて検討する。合法な移動先の
      全てに自分の駒の利きが及んでいて安全に逃げられない(捕獲確定)状態を示す。
      ピンや取り合いの最終損得までは考慮しない機械判定であることに留意する。
+     `attackers: 0`(退避不可だがまだ当たっていない)の駒を見つけたら、
+     利きを足す候補手を**その手番のうちに**`verify_moves`で検証すること
+     (先送りにして好機を逃さない)。
    - `apply_move`/`engine_move`の応答に含まれる`attack_report`(`user_pieces`/
      `engine_pieces`)は**毎手番、`analyze_position`を呼ぶ前でも必ず目を通す**。
      `user_pieces`に載った駒は、解消済みと確認できるまで(逃げた・紐が付いた・
@@ -102,6 +105,11 @@ argument-hint: [difficulty 1-5] [user_side black|white]
      指定して再検証してよい。応答時間は伸びるが、より信頼できる読みが得られる
      (中盤の判断精度を優先する意図的なトレードオフ)。
    - `reply_pv_usi`(相手の最善応手の読み筋)を見て、狙いが成立しているか判断する。
+   - `major_piece_drop_threats_after`が非空の候補は、その手を指した瞬間は
+     安全に見えても新たな大駒打ち込みの脅威を自ら作る手なので原則避ける
+     (今は問題ない一手が、数手後に穴を突かれて態勢を崩す実例がある)。
+     `trapped_major_pieces_after`が非空の候補は、逆に相手の飛・角を捕獲確定に
+     追い込める好機なので優先的に検討する。
    - 序盤・中盤(目安: `get_state`の`move_number`等で判断)では、
      `major_piece_trade: true`の候補は`material_change`が明確なプラスでない限り
      優先度を下げる(大駒交換そのものを避ける方針)。終盤(玉の安全度で優劣が

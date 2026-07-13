@@ -587,6 +587,10 @@ def verify_moves(
     (成りを含む)が捕られるか」を示す真偽値。search_depth_completed == 0の
     場合はpvが空のため候補手自体の捕り駒のみで判定する(読み筋側の将来の
     大駒交換は検出できない)。局面フェーズ(序盤/中盤/終盤)の判定はしない。
+    major_piece_drop_threats_after/trapped_major_pieces_after(§20.2)は、
+    この手をpushした直後(応手を読む前)の局面に対するmajor_piece_drop_threats/
+    trapped_major_pieces(mover_color視点)。own_attacked_afterと同様、is_mateの
+    候補には付けない。
     """
     results = []
     for usi in usi_moves:
@@ -641,6 +645,8 @@ def verify_moves(
             "own_supports": len(attackers(pieces_after, mover_color, to_sq)),
         }
         entry["own_attacked_after"] = attacked_pieces(copy, color=mover_color)[:5]
+        entry["major_piece_drop_threats_after"] = major_piece_drop_threats(copy, color=mover_color)
+        entry["trapped_major_pieces_after"] = trapped_major_pieces(copy, color=mover_color)
 
         searcher = _Searcher(copy, node_limit)
         score, pv, completed_depth = _iterative_deepen(searcher, depth)
@@ -692,22 +698,28 @@ def _usi_square(sq: int) -> str:
     return f"{file_ + 1}{chr(ord('a') + rank)}"
 
 
-def major_piece_drop_threats(board: cshogi.Board) -> list[dict]:
+def major_piece_drop_threats(board: cshogi.Board, color: Optional[int] = None) -> list[dict]:
     """自陣後方への安全な大駒打ち込みが、成り込みと組み合わさって王手・両取り・
-    安全な当たりに発展する脅威の一覧(§17.1)。boardは手番側(防御側)の局面。
+    安全な当たりに発展する脅威の一覧(§17.1)。boardは防御側の局面。
     盤面は変更しない。
 
-    「手番側が2手連続で何もしなかった」場合の脅威を、既存のfind_mate_threat
+    「防御側が2手連続で何もしなかった」場合の脅威を、既存のfind_mate_threat
     (§11.2)と同じくpush_passで仮定して検出する。王手中(push_passが使えない)と、
     打ち込み自体が直接王手になる候補はこの関数の対象外(既存の王手検出・
     回避検証の範疇)。
+
+    colorを省略すると従来どおり手番側(board.turn)が防御側。colorを指定した
+    場合、board.turn == colorのとき(analyze_position等、従来どおりの呼び出し)
+    のみ最初のpush_passを行う。board.turn != colorのとき(verify_movesが候補手を
+    push直後、既に相手の実手番)は、その最初のpush_passを省略する(§20.1)。
     """
     if board.is_check():
         return []
 
     copy = _copy_board(board)
-    own_color = copy.turn
+    own_color = color if color is not None else copy.turn
     opp_color = cshogi.WHITE if own_color == cshogi.BLACK else cshogi.BLACK
+    needs_initial_pass = copy.turn == own_color
     hand_black, hand_white = copy.pieces_in_hand
     opp_hand = hand_black if opp_color == cshogi.BLACK else hand_white
     drop_piece_types = []
@@ -728,18 +740,26 @@ def major_piece_drop_threats(board: cshogi.Board) -> list[dict]:
     results = []
     for sq in candidate_squares:
         for piece_type in drop_piece_types:
-            entry = _check_drop_threat(copy, own_color, opp_color, sq, piece_type)
+            entry = _check_drop_threat(copy, own_color, opp_color, sq, piece_type, needs_initial_pass)
             if entry is not None:
                 results.append(entry)
     return results
 
 
 def _check_drop_threat(
-    copy: cshogi.Board, own_color: int, opp_color: int, sq: int, piece_type: int
+    copy: cshogi.Board, own_color: int, opp_color: int, sq: int, piece_type: int,
+    needs_initial_pass: bool = True,
 ) -> Optional[dict]:
-    """1つの打ち込み候補(マス・駒種)を検証する。呼び出し後、copyは元の局面に復元される。"""
+    """1つの打ち込み候補(マス・駒種)を検証する。呼び出し後、copyは元の局面に復元される。
+
+    needs_initial_pass=False(§20.1)のときは、copy.turnが既にopp_color(相手の
+    実手番)であることを前提に最初のpush_pass/pop_passを省略する。打ち込み後の
+    追撃を読むための2回目のpush_passは常に行う(own_color側が「何もしなかった」
+    ことを仮定する必要があるため)。
+    """
     usi = f"{_DROP_PIECE_TYPES[piece_type]}*{_usi_square(sq)}"
-    copy.push_pass()
+    if needs_initial_pass:
+        copy.push_pass()
     try:
         move = copy.move_from_usi(usi)
         if move == 0 or not copy.is_legal(move):
@@ -756,7 +776,8 @@ def _check_drop_threat(
         finally:
             copy.pop()
     finally:
-        copy.pop_pass()
+        if needs_initial_pass:
+            copy.pop_pass()
 
 
 def _find_followup_threat(
@@ -820,21 +841,29 @@ def _classify_followup(copy: cshogi.Board, own_color: int, opp_color: int, follo
 # --- 大駒の捕獲判定・トラップ検出(§18) ---------------------------------------
 
 
-def trapped_major_pieces(board: cshogi.Board) -> list[dict]:
+def trapped_major_pieces(board: cshogi.Board, color: Optional[int] = None) -> list[dict]:
     """相手の飛・角(成りを含む: 龍・馬)のうち、盤上の合法な移動先の全てに
-    手番側の利きが及んでいて安全に逃げられない駒の一覧(§18.1)。boardは
-    手番側(攻撃側)の局面。盤面は変更しない。
+    攻撃側の利きが及んでいて安全に逃げられない駒の一覧(§18.1)。boardは
+    攻撃側の局面。盤面は変更しない。
 
     既存のmajor_piece_drop_threatsと同じくpush_passで「相手が実際に指せる
     合法手」を仮定して評価する。打ち込み(持ち駒からの新規配置)は対象外
     (§17のmajor_piece_drop_threatsの範疇)で、盤上に既にある大駒の移動可能性
     のみを判定する。静的な利き数のみで判定するため、ピンや複数回の取り合いの
     最終損得は考慮しない(§13.3の限界を踏襲する既知の制約)。
+
+    各エントリの`attackers`は、その駒へ現在実際に利いている攻撃側(own_color)の
+    駒数(§20.3)。0は「退避不可だがまだ当たっていない」、1以上は「既に当たって
+    おり次の一手で無償捕獲できる可能性が高い」ことを示す。
+
+    colorを省略すると従来どおり手番側(board.turn)が攻撃側。colorを指定した
+    場合、board.turn == colorのときのみpush_passを行い、board.turn != colorの
+    とき(verify_movesが候補手をpush直後)は省略する(§20.1)。
     """
     if board.is_check():
         return []
 
-    own_color = board.turn
+    own_color = color if color is not None else board.turn
     opp_color = cshogi.WHITE if own_color == cshogi.BLACK else cshogi.BLACK
     copy = _copy_board(board)
     pieces = copy.pieces
@@ -848,7 +877,9 @@ def trapped_major_pieces(board: cshogi.Board) -> list[dict]:
         return []
 
     results = []
-    copy.push_pass()
+    needs_initial_pass = copy.turn == own_color
+    if needs_initial_pass:
+        copy.push_pass()
     try:
         for sq in targets:
             moves = [m for m in copy.legal_moves if cshogi.move_from(m) == sq]
@@ -859,9 +890,11 @@ def trapped_major_pieces(board: cshogi.Board) -> list[dict]:
                 "square": square_name(sq),
                 "piece": PIECE_NAMES[piece_type],
                 "legal_move_count": len(moves),
+                "attackers": len(attackers(pieces, own_color, sq)),
             })
     finally:
-        copy.pop_pass()
+        if needs_initial_pass:
+            copy.pop_pass()
     return results
 
 
