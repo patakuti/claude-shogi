@@ -384,10 +384,12 @@ def analyze_position() -> dict:
     脅威の一覧([{square, piece, patterns, example_move_usi}, ...])。王手中は空リスト。
     trapped_major_pieces(§18.1)は、盤上に既にある相手の飛・角(成りを含む: 龍・馬)の
     うち、合法な移動先の全てに手番側の利きが及んでいて安全に逃げられない駒の一覧
-    ([{square, piece, legal_move_count}, ...])。合法な移動先が一つもない(完全に
-    動けない)駒はlegal_move_count: 0で含まれる。打ち込み(持ち駒からの新規配置)は
-    対象外。静的な利き数のみの判定でピンや取り合いの最終損得は考慮しない。王手中は
-    空リスト。
+    ([{square, piece, legal_move_count, attackers}, ...])。合法な移動先が一つもない
+    (完全に動けない)駒はlegal_move_count: 0で含まれる。attackers(§20.3)はその駒へ
+    現在実際に利いている手番側の駒数(0は退避不可だがまだ当たっていない、1以上は
+    既に当たっており無償捕獲できる可能性が高いことを示す)。打ち込み(持ち駒からの
+    新規配置)は対象外。静的な利き数のみの判定でピンや取り合いの最終損得は考慮
+    しない。王手中は空リスト。
     """
     board = _board_snapshot()
     if board is None:
@@ -427,6 +429,12 @@ def verify_moves(
     本ツールは局面フェーズ(序盤/中盤/終盤)を判定しない。大駒交換をなるべく
     避けたいのは序盤・中盤に限るといった運用判断は呼び出し側(get_state等と
     併用)で行うこと。
+    major_piece_drop_threats_after/trapped_major_pieces_after(§20.2): この手を
+    指した直後(応手を読む前)の局面に対するmajor_piece_drop_threats/
+    trapped_major_pieces(この手を指す側=自分視点)。前者が非空はこの手が新たな
+    大駒打ち込みの脅威を自ら生むことを、後者が非空は相手の飛・角を捕獲確定に
+    追い込めることを示す。どちらもown_attacked_afterと同様、is_mateの候補には
+    付けない。
     """
     board = _board_snapshot()
     if board is None:

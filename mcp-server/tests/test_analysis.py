@@ -581,9 +581,46 @@ def test_verify_moves_is_mate_candidate_has_no_destination():
     (entry,) = analysis.verify_moves(board, ["G*5b"])
     assert "destination" not in entry
     assert "own_attacked_after" not in entry
+    assert "major_piece_drop_threats_after" not in entry
+    assert "trapped_major_pieces_after" not in entry
 
 
 # --- 反復深化がverify_movesの信頼性判断に反映されること(§14.4) -----------------
+
+
+# --- verify_movesの候補手プレビュー(§20.2, §20.5(d)(e)) -----------------------
+
+# (d) games/2026-07-13_201007.kif、33手目(1八香、1i1h)を指す前の局面の再現。
+# この手は1九マスを空け、新たな角打ち・成り込みの脅威を自ら生む(振り返りで判明)。
+VERIFY_PREVIEW_PLY33_SFEN = (
+    "l6nl/1r2ggk2/pp1spp1sp/2pp2pp1/9/2PP5/PPS2PP1P/1GK2S1R1/LN3G1NL b BNb2p 33"
+)
+
+# (e) 同KIF、47手目相当の局面の再現。実戦では無難な香上がりを指したが、5八飛
+# (2h5h)を指すだけで後手の角(5七、trapped_major_piecesで退避不可と判定済み)を
+# 直接の当たり(紐なし)にできた。
+VERIFY_PREVIEW_PLY47_SFEN = (
+    "l7l/3r1gk2/p3pgnsp/1pppsppp1/9/2PP1PP2/PPS1bS2P/1GK4RL/LN3G1NB b N2p 47"
+)
+
+
+def test_verify_moves_major_piece_drop_threats_after_detects_new_threat():
+    board = cshogi.Board()
+    board.set_sfen(VERIFY_PREVIEW_PLY33_SFEN)
+    (entry,) = analysis.verify_moves(board, ["1i1h"])
+    assert any(e["square"] == "1九" for e in entry["major_piece_drop_threats_after"])
+
+
+def test_verify_moves_trapped_major_pieces_after_detects_capture_opportunity():
+    board = cshogi.Board()
+    board.set_sfen(VERIFY_PREVIEW_PLY47_SFEN)
+    (entry,) = analysis.verify_moves(board, ["2h5h"])
+    trapped = next(
+        (e for e in entry["trapped_major_pieces_after"] if e["square"] == "5七"), None
+    )
+    assert trapped is not None
+    assert trapped["piece"] == "角"
+    assert trapped["attackers"] >= 1
 
 
 def test_verify_moves_reports_zero_search_depth_completed_on_tiny_budget():
@@ -780,6 +817,31 @@ def test_analyze_includes_major_piece_drop_threats():
     assert any(e["square"] == "5八" for e in result["major_piece_drop_threats"])
 
 
+# --- major_piece_drop_threatsのcolor引数(§20.1, §20.5(a)(b)) -----------------
+
+
+def test_major_piece_drop_threats_color_defaults_to_side_to_move():
+    # (a) 後方互換性: board.turnと一致するcolorを明示しても従来どおりの結果になること。
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_PATTERN_D_SFEN)
+    assert analysis.major_piece_drop_threats(board, color=cshogi.BLACK) == (
+        analysis.major_piece_drop_threats(board)
+    )
+
+
+def test_major_piece_drop_threats_color_skips_initial_pass_when_turn_shifted():
+    # (b) verify_movesが候補手をpushした直後を模した局面: 手番は既に相手(opp_color)
+    # だが、防御側(own_color)は引き続きBLACKとして同じ脅威を検出できること
+    # (最初のpush_passが1回少ない状態でも正しく判定できることの確認)。
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_PATTERN_D_SFEN)
+    expected = analysis.major_piece_drop_threats(board, color=cshogi.BLACK)
+
+    shifted = cshogi.Board()
+    shifted.set_sfen(DROP_THREAT_PATTERN_D_SFEN.replace(" b ", " w "))
+    assert analysis.major_piece_drop_threats(shifted, color=cshogi.BLACK) == expected
+
+
 # --- trapped_major_pieces(§18.1, §18.3) --------------------------------------
 
 # (a) games/2026-07-12_181507.kif、26手目(３七角打)の直後に２九飛(2h2i)を指した
@@ -874,6 +936,50 @@ def test_analyze_includes_trapped_major_pieces():
     board.set_sfen(TRAPPED_BISHOP_SFEN)
     result = analysis.analyze(board)
     assert any(e["square"] == "3七" for e in result["trapped_major_pieces"])
+
+
+def test_trapped_major_pieces_attackers_zero_when_not_currently_attacked():
+    # (f) 追加確認: 既存の§18.3ケースは退避不可だがまだ当たっていない(attackers: 0)。
+    board = cshogi.Board()
+    board.set_sfen(TRAPPED_BISHOP_SFEN)
+    entry = next(e for e in analysis.trapped_major_pieces(board) if e["square"] == "3七")
+    assert entry["attackers"] == 0
+
+
+# TRAPPED_BISHOP_SFENの3九へ先手香を追加し、3七の角に直接利きを足した盤面
+# (退避不可かつ既に当たっている状態。attackers >= 1になることの確認用)。
+TRAPPED_BISHOP_ATTACKED_SFEN = (
+    "ln1g3nl/1r3kgs1/1ppspp1p1/p2p2p2/7Np/2P2PPP1/PPSPPSb1P/2GK5/LN3GLRL b B 28"
+)
+
+
+def test_trapped_major_pieces_attackers_nonzero_when_currently_attacked():
+    # (f) 利きを足すと同じ角が引き続き検出されつつattackers >= 1へ切り替わること。
+    board = cshogi.Board()
+    board.set_sfen(TRAPPED_BISHOP_ATTACKED_SFEN)
+    entry = next(e for e in analysis.trapped_major_pieces(board) if e["square"] == "3七")
+    assert entry["attackers"] >= 1
+
+
+# --- trapped_major_piecesのcolor引数(§20.1, §20.5(c)) ------------------------
+
+
+def test_trapped_major_pieces_color_defaults_to_side_to_move():
+    board = cshogi.Board()
+    board.set_sfen(TRAPPED_BISHOP_SFEN)
+    assert analysis.trapped_major_pieces(board, color=cshogi.BLACK) == (
+        analysis.trapped_major_pieces(board)
+    )
+
+
+def test_trapped_major_pieces_color_skips_initial_pass_when_turn_shifted():
+    board = cshogi.Board()
+    board.set_sfen(TRAPPED_BISHOP_SFEN)
+    expected = analysis.trapped_major_pieces(board, color=cshogi.BLACK)
+
+    shifted = cshogi.Board()
+    shifted.set_sfen(TRAPPED_BISHOP_SFEN.replace(" b ", " w "))
+    assert analysis.trapped_major_pieces(shifted, color=cshogi.BLACK) == expected
 
 
 # --- simulate_line ----------------------------------------------------------
