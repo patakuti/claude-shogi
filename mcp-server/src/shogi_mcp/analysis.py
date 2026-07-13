@@ -269,6 +269,14 @@ def attacked_pieces(board: cshogi.Board, color: Optional[int] = None) -> list[di
     colorを省略すると従来どおり手番側。ピンや取り合いの手順は考慮しない静的な
     利き数。玉への当たり=王手はin_checkで報告する。盤上の利きに加え、相手の
     持ち駒の歩による当たり(pawn_drop_risk)も判定する(§15.1)。
+
+    紐(defenders)が1つ以上あり、かつその全てが自玉である場合は
+    king_only_defense: trueを返す(§19.1)。玉による「防御」は実際に取り返すと
+    玉自身が危険な位置に出る特殊なケースであり、他の駒による紐と同列に安全とは
+    見なせない。hanging(紐なし)とは排他的な関係(両方trueにはならない)。
+    ただし玉が動いた後に実際に安全かどうか(他の駒の利きに新たに入るか)までは
+    判定しない。あくまで「紐の内訳が玉のみである」という事実のみを返し、
+    最終判断は呼び出し側に委ねる(§13.3の限界を踏襲)。
     """
     pieces = board.pieces
     own_color = board.turn if color is None else color
@@ -289,6 +297,9 @@ def attacked_pieces(board: cshogi.Board, color: Optional[int] = None) -> list[di
         if not atk and not drop_risk:
             continue
         defenders = attackers(pieces, own_color, sq)
+        king_only_defense = bool(defenders) and all(
+            pieces[d] % _WHITE_OFFSET == cshogi.KING for d in defenders
+        )
         cheapest = (
             PIECE_NAMES[pieces[min(atk, key=lambda a: PIECE_VALUES[pieces[a] % _WHITE_OFFSET])] % _WHITE_OFFSET]
             if atk else None
@@ -299,6 +310,7 @@ def attacked_pieces(board: cshogi.Board, color: Optional[int] = None) -> list[di
             "attackers": len(atk),
             "defenders": len(defenders),
             "hanging": not defenders,
+            "king_only_defense": king_only_defense,
             "cheapest_attacker": cheapest,
             "pawn_drop_risk": drop_risk,
             "_value": PIECE_VALUES[piece_type],

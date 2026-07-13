@@ -123,6 +123,18 @@ def test_engine_move_includes_attack_report():
     assert set(result["attack_report"]) == {"user_pieces", "engine_pieces"}
 
 
+def test_apply_move_attack_report_reflects_king_only_defense():
+    # §19.1/§19.4(e): attacked_pieces()の共通関数がattack_reportにも反映されること。
+    # 先手玉4四のみが桂(3四打)を守り、後手の馬(6七)が3四に利いている局面。
+    server.new_game(difficulty=1, user_side="black")
+    server._session.game.board.set_sfen("4k4/9/9/5K3/9/9/3+b5/9/9 b N 1")
+    result = server.apply_move("N*3d")
+    report = result["attack_report"]
+    (entry,) = report["user_pieces"]
+    assert entry["square"] == "3四"
+    assert entry["king_only_defense"]
+
+
 def test_engine_hint_does_not_modify_board():
     server.new_game(difficulty=1, user_side="black")
     before = server.get_state()
