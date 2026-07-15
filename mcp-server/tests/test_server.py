@@ -58,6 +58,35 @@ def test_state_and_kif_include_player_names():
     assert "▲やねうら王 Lv1 △ユーザー" in fragment
 
 
+def test_new_game_model_name_is_recorded_in_player_names():
+    # 02_design.md §23: model_nameはClaudeが手の決定主体のモードでのみ対局者名に合成される
+    result = server.new_game(
+        difficulty=1, user_side="black", mode="brain", model_name="Sonnet 5"
+    )
+    assert result["players"] == {"black": "Claude Sonnet 5(思考)", "white": "やねうら王 Lv1"}
+    text = Path(result["kif_path"]).read_text(encoding="cp932")
+    assert "先手：Claude Sonnet 5(思考)" in text
+
+
+def test_new_game_model_name_ignored_for_user_mode():
+    result = server.new_game(
+        difficulty=1, user_side="black", mode="user", model_name="Sonnet 5"
+    )
+    assert result["players"] == {"black": "ユーザー", "white": "やねうら王 Lv1"}
+
+
+def test_load_kif_preserves_model_name():
+    started = server.new_game(
+        difficulty=1, user_side="black", mode="brain", model_name="Sonnet 5"
+    )
+    server.apply_move("7g7f")
+    kif_path = started["kif_path"]
+
+    result = server.load_kif(kif_path)
+    assert result["ok"]
+    assert result["players"] == {"black": "Claude Sonnet 5(思考)", "white": "やねうら王 Lv1"}
+
+
 def test_apply_move_updates_state_and_autosaves():
     new_game_result = server.new_game(difficulty=1, user_side="black")
     kif_path = Path(new_game_result["kif_path"])
@@ -240,9 +269,9 @@ def test_verify_moves_clamps_node_limit_to_safe_range():
     captured = {}
     original = server.analysis.verify_moves
 
-    def spy(board, moves, depth, node_limit):
+    def spy(board, moves, depth, node_limit, mate_ply):
         captured["node_limit"] = node_limit
-        return original(board, moves, depth=depth, node_limit=node_limit)
+        return original(board, moves, depth=depth, node_limit=node_limit, mate_ply=mate_ply)
 
     with mock.patch.object(server.analysis, "verify_moves", side_effect=spy):
         server.verify_moves(["7g7f"], node_limit=1)
@@ -251,6 +280,44 @@ def test_verify_moves_clamps_node_limit_to_safe_range():
         assert captured["node_limit"] == 300_000
         server.verify_moves(["7g7f"], node_limit=50_000)
         assert captured["node_limit"] == 50_000
+
+
+def test_verify_moves_clamps_mate_ply_to_safe_range():
+    # (f) mate_plyのクランプ範囲(下限1、実測で確定した上限21、§22.3)。
+    server.new_game(difficulty=1, user_side="black", mode="brain")
+    captured = {}
+    original = server.analysis.verify_moves
+
+    def spy(board, moves, depth, node_limit, mate_ply):
+        captured["mate_ply"] = mate_ply
+        return original(board, moves, depth=depth, node_limit=node_limit, mate_ply=mate_ply)
+
+    with mock.patch.object(server.analysis, "verify_moves", side_effect=spy):
+        server.verify_moves(["7g7f"], mate_ply=0)
+        assert captured["mate_ply"] == 1
+        server.verify_moves(["7g7f"], mate_ply=1_000)
+        assert captured["mate_ply"] == 21
+        server.verify_moves(["7g7f"], mate_ply=9)
+        assert captured["mate_ply"] == 9
+
+
+def test_verify_moves_deeper_mate_ply_finds_mate_missed_by_default():
+    # (g) games/2026-07-15_182533.kif 66手目(△7八金打)直後、黒番の応手局面の再現。
+    # 既定のmate_ply(5)では3h7h(同飛)の先の7手詰みを検出できないが、mate_plyを
+    # 明示的に7以上へ引き上げると検出できる(実測は§22.3のクランプ上限21の根拠)。
+    server.new_game(difficulty=1, user_side="black")
+    server._session.game.board.set_sfen(
+        "+R4gknl/4g1s2/p3pp1pp/1pp3p2/1n1pS2P1/1SP3P2/PP1gbP2P/1Kg3R2/1N5NL b BSLPlp 67"
+    )
+
+    default_result = server.verify_moves(["3h7h"])
+    (default_entry,) = default_result["results"]
+    assert default_entry["allows_mate"] is None
+
+    deeper_result = server.verify_moves(["3h7h"], mate_ply=7)
+    (deeper_entry,) = deeper_result["results"]
+    assert deeper_entry["allows_mate"] is not None
+    assert deeper_entry["allows_mate"]["within_ply"] == 7
 
 
 def test_simulate_line_does_not_touch_real_board():

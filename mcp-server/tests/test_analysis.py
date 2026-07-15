@@ -64,6 +64,21 @@ DEFENDED_DROP_SFEN = "4k4/9/6G2/9/9/9/3+b5/9/4K4 b N 1"
 # 付けている(玉のみが紐であること)。
 KING_ONLY_DEFENSE_DROP_SFEN = "4k4/9/9/5K3/9/9/3+b5/9/9 b N 1"
 
+# own_king_shelter_after(§22.2)検証用 ----------------------------------------
+
+# games/2026-07-15_182533.kif 35手目相当(34手目△6五銀の直後)の再現局面。
+# ▲5五歩(5f5e)は着手直後は玉の守備駒に変化がないが、読み筋を最後まで適用すると
+# 玉隣接の金(6八)が最前線へ釣り出され、隣接金銀の数が1→0に減る(振り返りで判明)。
+KING_SHELTER_PV_DECREASE_SFEN = (
+    "l4gknl/3rg1sb1/p3pp1pp/1pp3p2/1n1s3P1/1SPSP1P2/PP1G1P2P/1BK1G2R1/LN5NL b Pp 35"
+)
+
+# 候補手が玉の移動そのものである場合(§22.6(e))の再現局面。games/2026-07-15_182533.kif
+# 67手目相当(66手目△7八金打による王手直後)。候補8h9iは黒玉自身を9九へ動かす手。
+KING_MOVES_ITSELF_SFEN = (
+    "+R4gknl/4g1s2/p3pp1pp/1pp3p2/1n1pS2P1/1SP3P2/PP1gbP2P/1Kg3R2/1N5NL b BSLPlp 67"
+)
+
 # major_piece_trade(§16.1)検証用 -------------------------------------------
 
 # 大駒・小駒を含まない静かな手: 候補も読み筋も大駒に一切触れない。
@@ -436,6 +451,40 @@ def test_analyze_reports_attacked_pieces():
     assert [e["piece"] for e in result["attacked_pieces"]] == ["銀", "歩"]
 
 
+# --- king_safety(§22.4) -------------------------------------------------------
+
+# own_shelter_count検証用: 先手玉5九に、隣接する5八の金・4八の銀(いずれも自分の駒)。
+KING_SAFETY_SHELTER_SFEN = "4k4/9/9/9/9/9/9/4GS3/4K4 b - 1"
+
+# opponent_hand_value検証用: 手番(先手)から見た相手(後手)の持ち駒が飛1・歩2。
+KING_SAFETY_HAND_VALUE_SFEN = "4k4/9/9/9/9/9/9/9/4K4 b r2p 1"
+
+
+def test_analyze_king_safety_own_shelter_count():
+    # (h) 玉の隣接マスに金銀(成駒含む)を配置した局面で正しい数を返すこと。
+    board = cshogi.Board()
+    board.set_sfen(KING_SAFETY_SHELTER_SFEN)
+    result = analysis.analyze(board)
+    assert result["king_safety"]["own_shelter_count"] == 2
+
+
+def test_analyze_king_safety_opponent_hand_value():
+    # (i) 相手の持ち駒価値の合計(HAND_PIECE_VALUESによる期待値)と一致すること。
+    board = cshogi.Board()
+    board.set_sfen(KING_SAFETY_HAND_VALUE_SFEN)
+    result = analysis.analyze(board)
+    assert result["king_safety"]["opponent_hand_value"] == 1000 + 2 * 100
+
+
+def test_analyze_king_safety_present_while_in_check():
+    # (j) 王手中でもmajor_piece_drop_threats等と異なり空にならず、通常どおり計算される。
+    board = cshogi.Board()
+    board.set_sfen(IN_CHECK_SFEN)
+    result = analysis.analyze(board)
+    assert result["in_check"]
+    assert result["king_safety"] == {"own_shelter_count": 0, "opponent_hand_value": 0}
+
+
 # --- 玉の安全度(king safety) -------------------------------------------------
 
 
@@ -449,6 +498,23 @@ def test_eval_penalizes_exposed_king():
     score_exposed = analysis.search_material(exposed, depth=0)["score"]
     score_safe = analysis.search_material(safe, depth=0)["score"]
     assert score_exposed < score_safe
+
+
+# --- _king_shelter_count(玉の隣接金銀カウント、§22.1) -------------------------
+
+
+def test_king_shelter_count_counts_adjacent_own_gold_silver_and_promoted():
+    # (a) 隣接する金・銀・と金(金と同格の成駒)は数え、隣接しない駒・敵駒・
+    # 対象外の駒種(桂)は数えないこと。
+    pieces = [0] * 81
+    king_sq = _sq(5, 5)
+    pieces[_sq(5, 4)] = cshogi.GOLD          # 隣接・自分の金
+    pieces[_sq(4, 5)] = cshogi.SILVER        # 隣接・自分の銀
+    pieces[_sq(6, 6)] = cshogi.PROM_PAWN     # 隣接・自分のと金(金と同格)
+    pieces[_sq(6, 5)] = cshogi.GOLD + 16     # 隣接・相手の金(対象外)
+    pieces[_sq(4, 6)] = cshogi.KNIGHT        # 隣接・自分の桂(対象外の駒種)
+    pieces[_sq(5, 3)] = cshogi.GOLD          # 非隣接・自分の金(対象外)
+    assert analysis._king_shelter_count(pieces, cshogi.BLACK, king_sq) == 3
 
 
 # --- 反復深化(iterative deepening, §14.4) -------------------------------------
@@ -584,6 +650,7 @@ def test_verify_moves_is_mate_candidate_has_no_destination():
     assert "major_piece_drop_threats_after" not in entry
     assert "trapped_major_pieces_after" not in entry
     assert "own_trapped_major_pieces_after" not in entry  # (h) §21.4
+    assert "own_king_shelter_after" not in entry  # (d) §22.6
 
 
 # --- verify_movesのown_trapped_major_pieces_after(§21.2, §21.4(f)(g)) ----------
@@ -613,6 +680,47 @@ def test_verify_moves_own_trapped_major_pieces_after_empty_on_safe_candidate():
     board.set_sfen(OWN_TRAPPED_AFTER_SAFE_SFEN)
     (entry,) = analysis.verify_moves(board, ["B*5g"])
     assert entry["own_trapped_major_pieces_after"] == []
+
+
+# --- verify_movesのown_king_shelter_after(§22.2, §22.6(b)(c)(e)) --------------
+
+
+def test_verify_moves_own_king_shelter_after_decreases_along_pv():
+    # (b) games/2026-07-15_182533.kif 34手目相当の再現局面。▲5五歩は着手直後は
+    # 玉の守備駒数に変化がないが、読み筋を最後まで適用すると隣接の金が釣り出されて
+    # immediately_afterよりafter_pvが減ること。
+    board = cshogi.Board()
+    board.set_sfen(KING_SHELTER_PV_DECREASE_SFEN)
+    (entry,) = analysis.verify_moves(board, ["5f5e"])
+    shelter = entry["own_king_shelter_after"]
+    assert shelter["after_pv"] is not None
+    assert shelter["after_pv"] < shelter["immediately_after"]
+
+
+def test_verify_moves_own_king_shelter_after_pv_is_none_on_zero_depth():
+    # (c) search_depth_completed == 0のとき、after_pvがnullであること
+    # (material_changeがnullになる場合と同じ扱い)。
+    board = cshogi.Board()
+    board.set_sfen(KING_EXPOSED_SFEN)
+    (entry,) = analysis.verify_moves(board, ["5i5h"], node_limit=1)
+    assert entry["search_depth_completed"] == 0
+    assert entry["own_king_shelter_after"]["after_pv"] is None
+
+
+def test_verify_moves_own_king_shelter_after_reflects_king_move_itself():
+    # (e) 候補手が玉の移動そのものである場合、immediately_afterが移動後の玉の
+    # 位置を基準に正しく評価されること。games/2026-07-15_182533.kif 66手目
+    # (△7八金打)の王手直後、黒玉が9九へ逃げる候補(8h9i)の再現。
+    board = cshogi.Board()
+    board.set_sfen(KING_MOVES_ITSELF_SFEN)
+    (entry,) = analysis.verify_moves(board, ["8h9i"])
+    b2 = cshogi.Board()
+    b2.set_sfen(KING_MOVES_ITSELF_SFEN)
+    b2.push(b2.move_from_usi("8h9i"))
+    expected = analysis._king_shelter_count(
+        b2.pieces, cshogi.BLACK, b2.king_square(cshogi.BLACK)
+    )
+    assert entry["own_king_shelter_after"]["immediately_after"] == expected
 
 
 # --- 反復深化がverify_movesの信頼性判断に反映されること(§14.4) -----------------

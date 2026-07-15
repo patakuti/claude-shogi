@@ -26,7 +26,9 @@ from typing import Optional
 
 from cshogi import KIF
 
-_META_RE = re.compile(r"difficulty:(\d+)\s+user_side:(black|white)\s+mode:(\S+)")
+_META_RE = re.compile(
+    r"difficulty:(\d+)\s+user_side:(black|white)\s+mode:(\S+)(?:\s+model:(.*))?"
+)
 
 # KIFはcp932で書き出される。エンコードできない文字(絵文字等)があると
 # Exporterのwriteが失敗するため、書き込み前に置換する。
@@ -42,6 +44,10 @@ class GameMeta:
     difficulty: int
     user_side: str  # "black" | "white"
     mode: str  # "auto" | "discuss" | "user" | "brain"
+    # Claude自身が申告するモデル名(例:"Sonnet 5"。02_design.md §23)。
+    # MCPサーバー側では自動判別できないため、new_gameの呼び出し側(スラッシュコマンド)が渡す。
+    # 空文字は「未申告」を表し、対局者名にはモデル名を含めない(旧KIFとの後方互換)。
+    model_name: str = ""
 
 
 # ユーザー側の対局者名(モード別)。自動/対話はエンジンヒント併用だが、
@@ -55,8 +61,12 @@ _MODE_PLAYER_NAMES = {
 
 
 def player_names(meta: GameMeta) -> tuple[str, str]:
-    """メタ情報から(先手名, 後手名)を導出する(02_design.md §13.6)。"""
+    """メタ情報から(先手名, 後手名)を導出する(02_design.md §13.6, §23)。"""
     user_name = _MODE_PLAYER_NAMES.get(meta.mode, meta.mode)
+    if meta.model_name and user_name.startswith("Claude"):
+        # 「Claude(思考)」→「Claude Sonnet 5(思考)」のように、Claudeが手の決定主体の
+        # モードに限りモデル名を挿入する(user modeの「ユーザー」表記は対象外)。
+        user_name = "Claude " + meta.model_name + user_name[len("Claude") :]
     engine_name = f"やねうら王 Lv{meta.difficulty}"
     if meta.user_side == "black":
         return user_name, engine_name
@@ -117,11 +127,14 @@ class KifStore:
         exporter = KIF.Exporter(str(self.path))
         try:
             exporter.header(names=list(player_names(self.meta)))
-            exporter.kifu.write(
+            meta_line = (
                 f"*difficulty:{self.meta.difficulty} "
                 f"user_side:{self.meta.user_side} "
-                f"mode:{self.meta.mode}\n"
+                f"mode:{self.meta.mode}"
             )
+            if self.meta.model_name:
+                meta_line += f" model:{self.meta.model_name}"
+            exporter.kifu.write(meta_line + "\n")
             for number, move in enumerate(moves, start=1):
                 exporter.move(move)
                 for line in comments.get(number, []):
@@ -143,6 +156,7 @@ class KifStore:
             difficulty=int(m.group(1)),
             user_side=m.group(2),
             mode=m.group(3),
+            model_name=(m.group(4) or "").strip(),
         )
         resigned = parser.endgame == "%TORYO"
         comments: dict[int, list[str]] = {}

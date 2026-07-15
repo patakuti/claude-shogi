@@ -215,6 +215,28 @@ def _king_danger(pieces: list[int], attacker_is_white: bool, king_sq: int) -> in
     return danger
 
 
+_SHELTER_PIECE_TYPES = frozenset({
+    cshogi.GOLD, cshogi.SILVER,
+    cshogi.PROM_PAWN, cshogi.PROM_LANCE, cshogi.PROM_KNIGHT, cshogi.PROM_SILVER,
+})
+
+
+def _king_shelter_count(pieces: list[int], color: int, king_sq: int) -> int:
+    """colorの玉(king_sq)に隣接するcolor自身の金・銀(金と同格の成駒を含む)の数(§22.1)。
+
+    _KING_ZONES(§13.5で玉の安全度項のために前計算済み)をそのまま流用する。
+    """
+    is_white = color == cshogi.WHITE
+    count = 0
+    for zone_sq in _KING_ZONES[king_sq]:
+        code = pieces[zone_sq]
+        if code == 0 or (code >= _WHITE_OFFSET) != is_white:
+            continue
+        if code % _WHITE_OFFSET in _SHELTER_PIECE_TYPES:
+            count += 1
+    return count
+
+
 def _eval_for_side_to_move(board: cshogi.Board) -> int:
     """材料点差 + 玉の安全度(§13.5)。手番側視点。"""
     pieces = board.pieces
@@ -539,6 +561,13 @@ def analyze(board: cshogi.Board, mate_ply: int = 7, threat_ply: int = DEFAULT_MA
     def hand_dict(counts) -> dict:
         return {name: n for name, n in zip(HAND_PIECE_NAMES, counts) if n > 0}
 
+    own_color = copy.turn
+    opp_hand = hand_white if own_color == cshogi.BLACK else hand_black
+    king_safety = {
+        "own_shelter_count": _king_shelter_count(copy.pieces, own_color, copy.king_square(own_color)),
+        "opponent_hand_value": sum(n * v for n, v in zip(opp_hand, HAND_PIECE_VALUES)),
+    }
+
     return {
         "material": {"black": black, "white": white, "diff_black_minus_white": black - white},
         "hands": {"black": hand_dict(hand_black), "white": hand_dict(hand_white)},
@@ -549,6 +578,7 @@ def analyze(board: cshogi.Board, mate_ply: int = 7, threat_ply: int = DEFAULT_MA
         "attacked_pieces": attacked_pieces(copy),
         "major_piece_drop_threats": major_piece_drop_threats(copy),
         "trapped_major_pieces": trapped_major_pieces(copy),
+        "king_safety": king_safety,
     }
 
 
@@ -597,6 +627,13 @@ def verify_moves(
     逆転(攻撃側=相手、防御側=自分)で呼んだ結果。空でなければ、この手を
     指した直後に自分の飛・角(成りを含む)が捕獲確定(トラップ)になって
     いることを示す。is_mateの候補には付けない。
+    own_king_shelter_after(§22.2)は、自玉に隣接する自分の金・銀(金と
+    同格の成駒を含む)の数を、immediately_after(着手直後)/after_pv(読み筋
+    reply_pv_usiを最後まで適用した後)の2値で返す。after_pvは
+    search_depth_completed == 0(信頼できる読みなし)の場合null
+    (material_changeがnullになる場合と同じ扱い)。is_mateの候補には付けない。
+    mate_ply(§22.3)は着手直後の局面でallows_mateを判定する詰み探索の深さ。
+    既定はDEFAULT_MATE_PLY(5)。
     """
     results = []
     for usi in usi_moves:
@@ -651,6 +688,11 @@ def verify_moves(
             "own_supports": len(attackers(pieces_after, mover_color, to_sq)),
         }
         entry["own_attacked_after"] = attacked_pieces(copy, color=mover_color)[:5]
+        mover_king_sq = copy.king_square(mover_color)  # 着手直後(候補手自体で玉が動いた場合も反映済み)
+        entry["own_king_shelter_after"] = {
+            "immediately_after": _king_shelter_count(copy.pieces, mover_color, mover_king_sq),
+            "after_pv": None,
+        }
         entry["major_piece_drop_threats_after"] = major_piece_drop_threats(copy, color=mover_color)
         entry["trapped_major_pieces_after"] = trapped_major_pieces(copy, color=mover_color)
         entry["own_trapped_major_pieces_after"] = trapped_major_pieces(copy, color=opponent_color)
@@ -675,6 +717,9 @@ def verify_moves(
                 entry["material_change"] = (end_white - end_black) - (base_white - base_black)
             entry["reply_pv_usi"] = [cshogi.move_to_usi(m) for m in pv]
             entry["major_piece_trade"] = _captures_major_piece([move] + pv)
+            entry["own_king_shelter_after"]["after_pv"] = _king_shelter_count(
+                copy.pieces, mover_color, copy.king_square(mover_color)
+            )
         results.append(entry)
     return results
 

@@ -28,12 +28,14 @@ class SessionState:
         user_side: str,
         mode: str,
         kif_path: Optional[Path] = None,
+        model_name: str = "",
     ):
         preset = presets.get(difficulty)
         self.game = rules.Game()
         self.difficulty = difficulty
         self.user_side = user_side
         self.mode = mode
+        self.model_name = model_name
         self.resigned = False
         # 手数(1始まり)→その手に付けるKIFコメント行(エンジン評価値・Claudeコメント、02_design.md §12)
         self.comments: dict[int, list[str]] = {}
@@ -49,7 +51,9 @@ class SessionState:
         )
         self.engine.start()
 
-        meta = kif_store.GameMeta(difficulty=difficulty, user_side=user_side, mode=mode)
+        meta = kif_store.GameMeta(
+            difficulty=difficulty, user_side=user_side, mode=mode, model_name=model_name
+        )
         self.kif_store = kif_store.KifStore(GAMES_DIR)
         if kif_path is not None:
             self.kif_store.path = Path(kif_path)
@@ -61,8 +65,8 @@ class SessionState:
         return presets.get(self.difficulty)
 
     def player_names(self) -> tuple[str, str]:
-        """(先手名, 後手名)。メタ情報から導出する(02_design.md §13.6)。"""
-        meta = kif_store.GameMeta(self.difficulty, self.user_side, self.mode)
+        """(先手名, 後手名)。メタ情報から導出する(02_design.md §13.6, §23)。"""
+        meta = kif_store.GameMeta(self.difficulty, self.user_side, self.mode, self.model_name)
         return kif_store.player_names(meta)
 
     def moves_usi(self) -> list[str]:
@@ -197,10 +201,19 @@ def _think_with_recovery(session: SessionState, **go_kwargs):
 
 
 @mcp.tool()
-def new_game(difficulty: int = presets.DEFAULT_LEVEL, user_side: str = "black", mode: str = "auto") -> dict:
+def new_game(
+    difficulty: int = presets.DEFAULT_LEVEL,
+    user_side: str = "black",
+    mode: str = "auto",
+    model_name: str = "",
+) -> dict:
     """新規対局を開始する。difficultyは1(入門)〜5(最強)、user_sideは"black"/"white"。
 
     対局中の場合は現在の対局を破棄して新規対局を開始する(直前まではKIFに自動保存済み)。
+    model_nameは手の決定主体がClaude自身のモード(auto/discuss/brain)で、Claude自身の
+    モデル名(例:"Sonnet 5")を渡すとKIFの対局者名に含める(例:「Claude Sonnet 5(思考)」)。
+    MCPサーバー側ではモデル名を自動判別できないため呼び出し側の自己申告に依存する。
+    空文字(既定)なら従来どおりモデル名なしの表記のまま(§23)。
     """
     global _session
     if user_side not in ("black", "white"):
@@ -215,7 +228,9 @@ def new_game(difficulty: int = presets.DEFAULT_LEVEL, user_side: str = "black", 
     with _session_lock:
         if _session is not None:
             _session.close()
-        _session = SessionState(difficulty=difficulty, user_side=user_side, mode=mode)
+        _session = SessionState(
+            difficulty=difficulty, user_side=user_side, mode=mode, model_name=model_name
+        )
         result = _state_dict(_session)
         result["kif_path"] = str(_session.kif_store.path)
     return result
@@ -394,6 +409,12 @@ def analyze_position() -> dict:
     既に当たっており無償捕獲できる可能性が高いことを示す)。打ち込み(持ち駒からの
     新規配置)は対象外。静的な利き数のみの判定でピンや取り合いの最終損得は考慮
     しない。王手中は空リスト。
+    king_safety(§22.4)は手番側視点の玉の安全度の要約。own_shelter_countは自玉に
+    隣接する自分の金・銀(金と同格の成駒を含む)の数、opponent_hand_valueは相手の
+    持ち駒の合計価値(既存の駒価値換算)。material(駒割り)だけでは見えない、
+    「駒得していても玉が薄く、相手の攻撃力が蓄積している」状態を数値で確認できる
+    (王手中でも他のフィールドと異なり空にならず、通常どおり計算される)。判断の
+    重み付け自体は呼び出し側に委ねる。
     """
     board = _board_snapshot()
     if board is None:
@@ -408,6 +429,7 @@ def verify_moves(
     moves: list[str],
     depth: int = analysis.DEFAULT_SEARCH_DEPTH,
     node_limit: int = analysis.DEFAULT_NODE_LIMIT,
+    mate_ply: int = analysis.DEFAULT_MATE_PLY,
 ) -> dict:
     """候補手(USI表記、最大10件)を機械検証する(盤面は変更しない)。Claude思考モード用。
 
@@ -443,6 +465,16 @@ def verify_moves(
     (攻撃側=相手、防御側=自分)で呼んだ結果。空でなければ、この手を指した
     直後に自分の飛・角(成りを含む)が捕獲確定(トラップ)になっていることを
     示す(候補手を選ぶ際は原則避けるべき)。is_mateの候補には付けない。
+    own_king_shelter_after(§22.2): 自玉に隣接する自分の金・銀(金と同格の
+    成駒を含む)の数を、immediately_after(着手直後)/after_pv(読み筋
+    reply_pv_usiを最後まで適用した後)の2値で返す。after_pvがimmediately_after
+    より減っていれば、材料点変化が同等でも読み筋の途中で玉の守備駒が
+    引き剥がされることを示す。search_depth_completed==0のときafter_pvはnull
+    (material_changeがnullになる場合と同じ制約)。is_mateの候補には付けない。
+    mate_ply(§22.3): allows_mate判定に使う詰み探索の深さ(手数上限)。既定値
+    (5)は変更しない。王手中で合法手が少ない局面など、探索コストが低い局面で
+    重要な判断の前だけ大きく指定すると、既定より深い強制詰み筋を検出できる
+    (node_limitと同じ「既定は変えず、必要な時だけ引き上げる」考え方)。
     """
     board = _board_snapshot()
     if board is None:
@@ -451,7 +483,13 @@ def verify_moves(
         return {"ok": False, "error": "no_moves_given"}
     depth = max(1, min(4, depth))
     node_limit = max(1_000, min(300_000, node_limit))
-    results = analysis.verify_moves(board, moves[:10], depth=depth, node_limit=node_limit)
+    # mate_ply上限21: 実測(games/2026-07-15_182533.kif 66手目相当の局面、
+    # 詰みなし候補で find_mate が3,5,...,21と累積探索する最悪ケース)で
+    # 約2.4秒、23では約13秒に跳ね上がることを確認した上で確定(§22.3)。
+    mate_ply = max(1, min(21, mate_ply))
+    results = analysis.verify_moves(
+        board, moves[:10], depth=depth, node_limit=node_limit, mate_ply=mate_ply
+    )
     return {"ok": True, "results": results}
 
 
@@ -508,7 +546,9 @@ def save_kif(path: str = "") -> dict:
         if path:
             target = kif_store.KifStore(GAMES_DIR)
             target.path = Path(path)
-            target.meta = kif_store.GameMeta(session.difficulty, session.user_side, session.mode)
+            target.meta = kif_store.GameMeta(
+                session.difficulty, session.user_side, session.mode, session.model_name
+            )
             target.save(moves, resigned=session.resigned, comments=session.comments)
             return {"ok": True, "path": str(target.path)}
 
@@ -540,6 +580,7 @@ def load_kif(path: str) -> dict:
             user_side=loaded.meta.user_side,
             mode=loaded.meta.mode,
             kif_path=kif_path,
+            model_name=loaded.meta.model_name,
         )
         for move_int in loaded.moves:
             result = new_session.game.apply_move(cshogi.move_to_usi(move_int))
