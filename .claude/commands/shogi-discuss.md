@@ -10,7 +10,10 @@ argument-hint: [difficulty 1-5] [user_side black|white]
 引数 `$ARGUMENTS` に難易度(1-5)と手番(black/white)が両方指定されていればそれを使う。
 指定がなければ、対局を始める前にユーザーに尋ねる(勝手にデフォルト値を使わない)。
 
-確認後、`new_game(difficulty, user_side, mode="discuss")` を呼ぶ。
+確認後、`new_game(difficulty, user_side, mode="discuss", model_name=<自分のモデル名>)` を呼ぶ。
+`model_name`にはシステムプロンプト(Environment節)に記載された自分のモデル名
+(例: "Sonnet 5")をそのまま渡す。対局者名にモデル名を記録するためで、
+省略すると記録されない(§23)。
 
 ## GUI盤面の自動更新
 

@@ -11,7 +11,10 @@ argument-hint: [difficulty 1-5] [user_side black|white]
 引数 `$ARGUMENTS` に難易度(1-5)と手番(black/white)が両方指定されていればそれを使う。
 指定がなければ、対局を始める前にユーザーに尋ねる(勝手にデフォルト値を使わない)。
 
-確認後、`new_game(difficulty, user_side, mode="brain")` を呼ぶ。
+確認後、`new_game(difficulty, user_side, mode="brain", model_name=<自分のモデル名>)` を呼ぶ。
+`model_name`にはシステムプロンプト(Environment節)に記載された自分のモデル名
+(例: "Sonnet 5")をそのまま渡す。対局者名にモデル名を記録するためで、
+省略すると記録されない(§23)。
 
 ## GUI盤面の自動更新
 
@@ -29,9 +32,21 @@ argument-hint: [difficulty 1-5] [user_side black|white]
 1. `get_state()` と `analyze_position()` で局面を把握する。
 2. **強制事項(この順で確認)**:
    - `mate_for_side_to_move` が見つかっていれば、その`first_move_usi`をそのまま指す(詰み逃し防止)。
+   - `king_safety`を毎手番確認する。`opponent_hand_value`(相手の持ち駒価値の
+     合計=攻撃力の蓄積)が大きいにもかかわらず`own_shelter_count`(自玉に隣接
+     する自分の金・銀の数)が小さい(自玉が薄い)場合は、`material`上で駒得して
+     いても、攻めよりも玉の受け(囲いの立て直し・隣接マスへの利き強化)を
+     優先する。駒得を重ねながら囲いが薄いまま波状攻撃を受けて逆転負けした
+     実例があるため、材料点の優劣だけで安心しない。
    - 自玉が王手されていれば(`in_check`)、`check_evasions.safe_usi`(回避後に詰みが残らない手)
      の中から受けを選ぶ。`all_allow_mate: true`なら受けなし=自分からの即詰みがない限り
      負け筋なので、投了を検討する(下記手順6)。
+     王手中で合法手が少ない(探索コストが低い)局面など、判断が重要な場面では、
+     `check_evasions`や`verify_moves`の`allows_mate`がいずれも`null`でも
+     安心せず、`verify_moves`の`mate_ply`引数を既定(5)より大きく指定して
+     再検証してよい(既定より深い強制詰み筋を見落としていたために回避手を
+     誤った実例がある。`node_limit`と同じ「既定は変えず、必要な時だけ
+     引き上げる」運用)。
    - `mate_threat_against_side_to_move` が見つかっていれば(詰めろ)、受ける手
      (玉の逃げ道を作る・詰み筋を消す・利きを足す)を最優先で考える。
      ただし自分からの詰み・より速い攻めがある場合は攻め合いも可(`verify_moves`で確認してから)。
@@ -119,6 +134,11 @@ argument-hint: [difficulty 1-5] [user_side black|white]
      直後に捕獲確定になる)は原則避ける。特に自分の飛・角そのものを動かす
      候補では、着地点の安全性を他の候補より厳しく評価する
      (桂の着地点リスクの重み付けと同じ考え方)。
+     `own_king_shelter_after`の`after_pv`が`immediately_after`より減っている
+     候補は、`material_change`が同等でも警戒する。着手直後は問題なく見えても、
+     読み筋(`reply_pv_usi`)の途中で自玉隣接の金・銀が最前線へ釣り出され、
+     玉の守備が薄くなるパターンを示す(材料点だけを見て選んだ結果、終盤の
+     受けが薄くなった実例がある)。
    - 序盤・中盤(目安: `get_state`の`move_number`等で判断)では、
      `major_piece_trade: true`の候補は`material_change`が明確なプラスでない限り
      優先度を下げる(大駒交換そのものを避ける方針)。終盤(玉の安全度で優劣が

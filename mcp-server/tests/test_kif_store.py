@@ -100,3 +100,54 @@ def test_kif_header_records_player_names(store):
     parser = cshogi.KIF.Parser.parse_file(str(store.path))
     assert parser.names[0] == "Claude(思考)"
     assert parser.names[1] == "やねうら王 Lv2"
+
+
+# --- 対局者名へのモデル名記録(02_design.md §23) -------------------------------
+
+
+def test_player_names_inserts_model_name_for_claude_driven_modes():
+    assert kif_store.player_names(
+        kif_store.GameMeta(difficulty=2, user_side="black", mode="brain", model_name="Sonnet 5")
+    ) == ("Claude Sonnet 5(思考)", "やねうら王 Lv2")
+    assert kif_store.player_names(
+        kif_store.GameMeta(difficulty=1, user_side="white", mode="auto", model_name="Opus 4.8")
+    ) == ("やねうら王 Lv1", "Claude Opus 4.8(自動)")
+
+
+def test_player_names_ignores_model_name_for_user_mode():
+    # userモードは手の決定主体がユーザー自身のため、model_nameを渡しても無視される
+    assert kif_store.player_names(
+        kif_store.GameMeta(difficulty=5, user_side="white", mode="user", model_name="Sonnet 5")
+    ) == ("やねうら王 Lv5", "ユーザー")
+
+
+def test_player_names_without_model_name_unchanged():
+    # model_name未指定(既定"")は従来どおりの表記のまま(後方互換)
+    assert kif_store.player_names(
+        kif_store.GameMeta(difficulty=2, user_side="black", mode="brain")
+    ) == ("Claude(思考)", "やねうら王 Lv2")
+
+
+def test_model_name_round_trips_through_kif(tmp_path):
+    s = kif_store.KifStore(tmp_path)
+    s.start(
+        kif_store.GameMeta(
+            difficulty=2, user_side="black", mode="brain", model_name="Sonnet 5"
+        )
+    )
+    s.save(_moves_int(MOVES_USI))
+
+    text = s.path.read_text(encoding="cp932")
+    assert "先手：Claude Sonnet 5(思考)" in text
+
+    loaded = kif_store.KifStore.load(s.path)
+    assert loaded.meta == kif_store.GameMeta(
+        difficulty=2, user_side="black", mode="brain", model_name="Sonnet 5"
+    )
+
+
+def test_kif_without_model_name_loads_empty_model_name(store):
+    # 旧KIF相当(model:行なし)を読んでもエラーにならず、空文字として復元される
+    store.save(_moves_int(MOVES_USI))
+    loaded = kif_store.KifStore.load(store.path)
+    assert loaded.meta.model_name == ""

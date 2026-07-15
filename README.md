@@ -94,6 +94,27 @@ Claude思考モード用の解析ツール `analyze_position` / `verify_moves` /
 非空ならこの手の直後に自分の飛・角が捕獲確定になっていることを示す
 (新規の判定アルゴリズムは追加せず、`trapped_major_pieces`の`color`引数を
 逆向きに呼ぶのみ。§21.2)。
+`verify_moves`の各候補には`own_king_shelter_after`(自玉に隣接する自分の
+金・銀〈金と同格の成駒を含む〉の数を、`immediately_after`〈着手直後〉/
+`after_pv`〈読み筋`reply_pv_usi`を最後まで適用した後〉の2値で返す)も含む。
+`search_depth_completed == 0`のとき`after_pv`は`null`
+(`material_change`と同じ制約)。`is_mate`の候補には付けない(§22.2)。
+`verify_moves`ツールは`mate_ply`引数(既定5、範囲1〜21。上限は実測で確定)も
+受け付け、`allows_mate`判定の詰み探索の深さを呼び出し側が指定できる。既定値は
+変更せず、王手中で合法手が少ない局面など重要な判断の前だけ深く指定する
+(`node_limit`と同じ考え方。§22.3)。
+`analyze_position`は`king_safety`(手番側視点の玉の安全度の要約:
+`own_shelter_count`〈自玉に隣接する自分の金・銀の数〉と`opponent_hand_value`
+〈相手の持ち駒の合計価値〉)も返す。王手中でも他のフィールドと異なり空に
+ならず、通常どおり計算される(§22.4)。
+`new_game`は`model_name`引数(既定は空文字)を受け付ける。手の決定主体が
+Claude自身のモード(自動/対話/Claude思考)でのみ、対局者名にモデル名を
+合成する(例: `model_name="Sonnet 5"` かつ思考モード →
+「Claude Sonnet 5(思考)」)。KIFヘッダー・GUI盤面・リプレイ画面いずれも
+`player_names`から導出される既存の表示にそのまま乗る。モデル名はMCPサーバー
+側では自動判別できないため、各スラッシュコマンドがシステムプロンプトに
+記載された自分のモデル名を自己申告する。ユーザー対話モード(`user`)は
+対象外(§23)。
 
 MCPサーバー起動時、`http://localhost:8765/` でGUI盤面(SVG)を配信するHTTPサーバーも
 常時待受する(標準ライブラリの`http.server`のみで実装、追加の外部依存なし)。ブラウザで
