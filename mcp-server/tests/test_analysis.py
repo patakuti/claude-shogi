@@ -583,6 +583,36 @@ def test_verify_moves_is_mate_candidate_has_no_destination():
     assert "own_attacked_after" not in entry
     assert "major_piece_drop_threats_after" not in entry
     assert "trapped_major_pieces_after" not in entry
+    assert "own_trapped_major_pieces_after" not in entry  # (h) §21.4
+
+
+# --- verify_movesのown_trapped_major_pieces_after(§21.2, §21.4(f)(g)) ----------
+
+# (f) 自分の角を、合法な移動先が完全に塞がれたマス(9九、直前に先手歩8八が
+# 唯一の逃げ道を塞ぐ)へ打つ候補。着手直後、角は動けず捕獲確定になる。
+OWN_TRAPPED_AFTER_DROP_SFEN = "9/9/9/9/4K3k/9/9/1P7/9 b B 1"
+
+# (g) 同型だが着地点を開けたマス(5七)にする、通常の安全な候補。
+OWN_TRAPPED_AFTER_SAFE_SFEN = OWN_TRAPPED_AFTER_DROP_SFEN
+
+
+def test_verify_moves_own_trapped_major_pieces_after_detects_self_trap():
+    board = cshogi.Board()
+    board.set_sfen(OWN_TRAPPED_AFTER_DROP_SFEN)
+    (entry,) = analysis.verify_moves(board, ["B*9i"])
+    trapped = next(
+        (e for e in entry["own_trapped_major_pieces_after"] if e["square"] == "9九"), None
+    )
+    assert trapped is not None
+    assert trapped["piece"] == "角"
+    assert trapped["legal_move_count"] == 0
+
+
+def test_verify_moves_own_trapped_major_pieces_after_empty_on_safe_candidate():
+    board = cshogi.Board()
+    board.set_sfen(OWN_TRAPPED_AFTER_SAFE_SFEN)
+    (entry,) = analysis.verify_moves(board, ["B*5g"])
+    assert entry["own_trapped_major_pieces_after"] == []
 
 
 # --- 反復深化がverify_movesの信頼性判断に反映されること(§14.4) -----------------
@@ -840,6 +870,145 @@ def test_major_piece_drop_threats_color_skips_initial_pass_when_turn_shifted():
     shifted = cshogi.Board()
     shifted.set_sfen(DROP_THREAT_PATTERN_D_SFEN.replace(" b ", " w "))
     assert analysis.major_piece_drop_threats(shifted, color=cshogi.BLACK) == expected
+
+
+# --- major_piece_drop_threatsのsource(§21.1) ---------------------------------
+
+
+def test_major_piece_drop_threats_full_scan_entries_are_tagged_drop_source():
+    # (a) 既存の打ち込み由来のエントリ全件にsource: "drop"が付くこと(後方互換性の
+    # 維持確認。戻り値の形が変わるため全件確認が必要)。
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_PATTERN_A_SFEN)
+    result = analysis.major_piece_drop_threats(board)
+    assert result
+    assert all(e["source"] == "drop" for e in result)
+
+
+def test_analyze_major_piece_drop_threats_entries_are_tagged_drop_source():
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_PATTERN_A_SFEN)
+    result = analysis.analyze(board)
+    assert all(e["source"] == "drop" for e in result["major_piece_drop_threats"])
+
+
+# --- 盤上の未成り大駒前進による成り込み脅威検出(§21.1, §21.4(b)(c)(d)) ---------
+
+# 白の飛が(2,4)から(2,X)へ前進+成りすることで、自陣3段目以内(rank7-9)に達し
+# 各パターンを実現できる局面。先手玉・後手玉は無関係な位置に離して配置する。
+
+# パターンB(王手のみ): 2四飛→2八竜が先手玉(5,8)と同じ段(8段目)に達して王手。
+BOARD_ADVANCE_PATTERN_B_SFEN = "8k/9/9/7r1/9/9/9/4K4/9 b - 1"
+
+# パターンA(王手+紐なし駒への当たり): 上に加え、後手の当たりを受ける先手銀3七を配置。
+# 2四飛→2七竜が3七の銀に当たりつつ王手(2七は5,8と同じ8段目ではないが、
+# 2七竜の紐なし判定は別マス、王手は7段目に達した2七竜からは生じない場合もあるため
+# 実際の判定は_board_advance_threatsの全候補手の和集合で成立する)。
+BOARD_ADVANCE_PATTERN_A_SFEN = "8k/9/9/7r1/9/9/6S2/4K4/9 b - 1"
+
+# パターンD(王手なし+紐なし駒への当たり+安全な移動先): 先手玉を5一に離し、
+# 2四飛の前進先である2七竜が3八の銀に当たるが王手にはならない配置。
+BOARD_ADVANCE_PATTERN_D_SFEN = "4K3k/9/9/7r1/9/9/9/6S2/9 b - 1"
+
+# パターンC(王手なし+紐なし駒を2つ同時に当てる): 上に加え、2四飛の前進で
+# 2七竜が3七・3九の銀2枚に同時に当たる配置(3九へは2七竜の縦利きが届く)。
+BOARD_ADVANCE_PATTERN_C_SFEN = "4K3k/9/9/7r1/9/9/6S2/9/6S2 b - 1"
+
+
+def test_board_advance_threats_detects_pattern_b():
+    board = cshogi.Board()
+    board.set_sfen(BOARD_ADVANCE_PATTERN_B_SFEN)
+    result = analysis.major_piece_drop_threats(board)
+    entry = next(e for e in result if e["square"] == "2四")
+    assert entry["source"] == "board"
+    assert entry["piece"] == "飛"
+    assert "B" in entry["patterns"]
+
+
+def test_board_advance_threats_detects_pattern_a():
+    board = cshogi.Board()
+    board.set_sfen(BOARD_ADVANCE_PATTERN_A_SFEN)
+    result = analysis.major_piece_drop_threats(board)
+    entry = next(e for e in result if e["square"] == "2四")
+    assert "A" in entry["patterns"]
+
+
+def test_board_advance_threats_detects_pattern_d():
+    board = cshogi.Board()
+    board.set_sfen(BOARD_ADVANCE_PATTERN_D_SFEN)
+    result = analysis.major_piece_drop_threats(board)
+    entry = next(e for e in result if e["square"] == "2四")
+    assert "D" in entry["patterns"]
+
+
+def test_board_advance_threats_detects_pattern_c():
+    board = cshogi.Board()
+    board.set_sfen(BOARD_ADVANCE_PATTERN_C_SFEN)
+    result = analysis.major_piece_drop_threats(board)
+    entry = next(e for e in result if e["square"] == "2四")
+    assert "C" in entry["patterns"]
+
+
+def test_board_advance_threats_excludes_promoted_piece():
+    # (c) 既に成っている駒(龍)は「成り込み」の前提に該当しないため対象外。
+    board = cshogi.Board()
+    sfen = BOARD_ADVANCE_PATTERN_B_SFEN.replace("r", "+r")
+    board.set_sfen(sfen)
+    result = analysis.major_piece_drop_threats(board)
+    assert result == []
+
+
+def test_board_advance_threats_empty_without_rook_or_bishop_on_board():
+    board = cshogi.Board()
+    board.set_sfen(DROP_THREAT_OPEN_SFEN.replace(" r ", " - "))
+    assert analysis.major_piece_drop_threats(board) == []
+
+
+def test_board_advance_threats_does_not_mutate_board():
+    board = cshogi.Board()
+    board.set_sfen(BOARD_ADVANCE_PATTERN_B_SFEN)
+    before = board.sfen()
+    analysis.major_piece_drop_threats(board)
+    assert board.sfen() == before
+
+
+def test_board_advance_threats_color_defaults_to_side_to_move():
+    # (d) 打ち込み版(§20.5(a))と同じ後方互換性確認。
+    board = cshogi.Board()
+    board.set_sfen(BOARD_ADVANCE_PATTERN_B_SFEN)
+    assert analysis.major_piece_drop_threats(board, color=cshogi.BLACK) == (
+        analysis.major_piece_drop_threats(board)
+    )
+
+
+def test_board_advance_threats_color_skips_initial_pass_when_turn_shifted():
+    # (d) 打ち込み版(§20.5(b))と同じ、手番ずれケースの確認。
+    board = cshogi.Board()
+    board.set_sfen(BOARD_ADVANCE_PATTERN_B_SFEN)
+    expected = analysis.major_piece_drop_threats(board, color=cshogi.BLACK)
+
+    shifted = cshogi.Board()
+    shifted.set_sfen(BOARD_ADVANCE_PATTERN_B_SFEN.replace(" b ", " w "))
+    assert analysis.major_piece_drop_threats(shifted, color=cshogi.BLACK) == expected
+
+
+# --- games/2026-07-15_060917.kif 26手目の実戦再現(§21.4(e)) --------------------
+
+# 白が６七角打を指した直後(手番は先手)の局面(KIFの26手目を適用した後、
+# cshogi.KIF.Parserで再現)。この角は次の一手で自陣後方へ成り込み、以降盤上を
+# 動き回る厄介な駒になった(振り返りで判明)。
+BOARD_ADVANCE_GAME_REPLAY_SFEN = (
+    "lnsg2snl/1r3kg2/p1p1pp1pp/6p2/3P5/1PP6/P1NbPPP1P/5S1R1/L1SGKG1NL b B3P 27"
+)
+
+
+def test_board_advance_threats_detects_2026_07_15_ply26_replay():
+    board = cshogi.Board()
+    board.set_sfen(BOARD_ADVANCE_GAME_REPLAY_SFEN)
+    result = analysis.major_piece_drop_threats(board)
+    entry = next((e for e in result if e["square"] == "6七" and e["source"] == "board"), None)
+    assert entry is not None
+    assert entry["piece"] == "角"
 
 
 # --- trapped_major_pieces(§18.1, §18.3) --------------------------------------
