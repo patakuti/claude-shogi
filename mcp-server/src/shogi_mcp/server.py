@@ -379,9 +379,13 @@ def analyze_position() -> dict:
     実質的な無防備として扱うべき(hangingとは排他)。
     王手中は詰めろ検出の代わりに全回避手を個別検証し、回避後も詰みが残らない手を返す
     (check_evasions.safe_usi。all_allow_mate=trueなら受けなし)。
-    major_piece_drop_threats(§17.1)は、自陣3段目以内の紐なしマスへの相手の飛・角の
-    安全な打ち込みが、成り込みと組み合わさって王手・両取り・安全な当たりに発展する
-    脅威の一覧([{square, piece, patterns, example_move_usi}, ...])。王手中は空リスト。
+    major_piece_drop_threats(§17.1、盤上前進版は§21.1)は、自陣3段目以内の紐なし
+    マスへの相手の飛・角の安全な打ち込み、または盤上に既にある相手の未成りの飛・角の
+    自陣3段目以内への前進が、成り込みと組み合わさって王手・両取り・安全な当たりに
+    発展する脅威の一覧([{square, piece, source, patterns, example_move_usi}, ...])。
+    source(§21.1)は打ち込み由来なら"drop"(squareは打ち込み先)、盤上の駒の前進
+    由来なら"board"(squareはその駒の現在地)。既に成っている駒(龍・馬)はsource:
+    "board"の対象外。王手中は空リスト。
     trapped_major_pieces(§18.1)は、盤上に既にある相手の飛・角(成りを含む: 龍・馬)の
     うち、合法な移動先の全てに手番側の利きが及んでいて安全に逃げられない駒の一覧
     ([{square, piece, legal_move_count, attackers}, ...])。合法な移動先が一つもない
@@ -431,10 +435,14 @@ def verify_moves(
     併用)で行うこと。
     major_piece_drop_threats_after/trapped_major_pieces_after(§20.2): この手を
     指した直後(応手を読む前)の局面に対するmajor_piece_drop_threats/
-    trapped_major_pieces(この手を指す側=自分視点)。前者が非空はこの手が新たな
-    大駒打ち込みの脅威を自ら生むことを、後者が非空は相手の飛・角を捕獲確定に
-    追い込めることを示す。どちらもown_attacked_afterと同様、is_mateの候補には
-    付けない。
+    trapped_major_pieces(この手を指す側=自分視点、攻撃側=自分)。前者が非空は
+    この手が新たな大駒打ち込み・前進の脅威を自ら生むことを(source§21.1で
+    出所を区別)、後者が非空は相手の飛・角を捕獲確定に追い込めることを示す。
+    どちらもown_attacked_afterと同様、is_mateの候補には付けない。
+    own_trapped_major_pieces_after(§21.2): trapped_major_piecesを攻守逆転
+    (攻撃側=相手、防御側=自分)で呼んだ結果。空でなければ、この手を指した
+    直後に自分の飛・角(成りを含む)が捕獲確定(トラップ)になっていることを
+    示す(候補手を選ぶ際は原則避けるべき)。is_mateの候補には付けない。
     """
     board = _board_snapshot()
     if board is None:

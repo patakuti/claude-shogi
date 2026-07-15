@@ -589,8 +589,14 @@ def verify_moves(
     大駒交換は検出できない)。局面フェーズ(序盤/中盤/終盤)の判定はしない。
     major_piece_drop_threats_after/trapped_major_pieces_after(§20.2)は、
     この手をpushした直後(応手を読む前)の局面に対するmajor_piece_drop_threats/
-    trapped_major_pieces(mover_color視点)。own_attacked_afterと同様、is_mateの
-    候補には付けない。
+    trapped_major_pieces(mover_color視点、攻撃側=自分)。own_attacked_afterと
+    同様、is_mateの候補には付けない。major_piece_drop_threats_afterの各
+    エントリのsource(§21.1)は、相手の持ち駒からの打ち込みなら"drop"、
+    盤上の未成りの飛・角の前進なら"board"。
+    own_trapped_major_pieces_after(§21.2)は、trapped_major_piecesを攻守
+    逆転(攻撃側=相手、防御側=自分)で呼んだ結果。空でなければ、この手を
+    指した直後に自分の飛・角(成りを含む)が捕獲確定(トラップ)になって
+    いることを示す。is_mateの候補には付けない。
     """
     results = []
     for usi in usi_moves:
@@ -647,6 +653,7 @@ def verify_moves(
         entry["own_attacked_after"] = attacked_pieces(copy, color=mover_color)[:5]
         entry["major_piece_drop_threats_after"] = major_piece_drop_threats(copy, color=mover_color)
         entry["trapped_major_pieces_after"] = trapped_major_pieces(copy, color=mover_color)
+        entry["own_trapped_major_pieces_after"] = trapped_major_pieces(copy, color=opponent_color)
 
         searcher = _Searcher(copy, node_limit)
         score, pv, completed_depth = _iterative_deepen(searcher, depth)
@@ -699,9 +706,9 @@ def _usi_square(sq: int) -> str:
 
 
 def major_piece_drop_threats(board: cshogi.Board, color: Optional[int] = None) -> list[dict]:
-    """自陣後方への安全な大駒打ち込みが、成り込みと組み合わさって王手・両取り・
-    安全な当たりに発展する脅威の一覧(§17.1)。boardは防御側の局面。
-    盤面は変更しない。
+    """自陣後方への安全な大駒打ち込み、または盤上の未成り大駒の前進が、
+    成り込みと組み合わさって王手・両取り・安全な当たりに発展する脅威の
+    一覧(§17.1、盤上前進版は§21.1)。boardは防御側の局面。盤面は変更しない。
 
     「防御側が2手連続で何もしなかった」場合の脅威を、既存のfind_mate_threat
     (§11.2)と同じくpush_passで仮定して検出する。王手中(push_passが使えない)と、
@@ -712,6 +719,12 @@ def major_piece_drop_threats(board: cshogi.Board, color: Optional[int] = None) -
     場合、board.turn == colorのとき(analyze_position等、従来どおりの呼び出し)
     のみ最初のpush_passを行う。board.turn != colorのとき(verify_movesが候補手を
     push直後、既に相手の実手番)は、その最初のpush_passを省略する(§20.1)。
+
+    各エントリの`source`は脅威の出所を示す。`"drop"`は相手の持ち駒からの
+    打ち込み(`square`は打ち込み先の空きマス)、`"board"`は盤上に既にある
+    未成りの飛・角の前進(`square`はその駒の現在地)。実際の脅威手(移動元・
+    移動先・成りの有無)は出所によらず`example_move_usi`で一意に分かる。
+    既に成っている駒(龍・馬)は`"board"`の対象外(§21.1)。
     """
     if board.is_check():
         return []
@@ -720,6 +733,8 @@ def major_piece_drop_threats(board: cshogi.Board, color: Optional[int] = None) -
     own_color = color if color is not None else copy.turn
     opp_color = cshogi.WHITE if own_color == cshogi.BLACK else cshogi.BLACK
     needs_initial_pass = copy.turn == own_color
+
+    results = []
     hand_black, hand_white = copy.pieces_in_hand
     opp_hand = hand_black if opp_color == cshogi.BLACK else hand_white
     drop_piece_types = []
@@ -727,23 +742,80 @@ def major_piece_drop_threats(board: cshogi.Board, color: Optional[int] = None) -
         drop_piece_types.append(cshogi.ROOK)
     if opp_hand[5] > 0:  # 角
         drop_piece_types.append(cshogi.BISHOP)
-    if not drop_piece_types:
+    if drop_piece_types:
+        pieces = copy.pieces
+        back_ranks = (6, 7, 8) if own_color == cshogi.BLACK else (0, 1, 2)
+        candidate_squares = [
+            sq for sq in range(81)
+            if pieces[sq] == 0 and sq % 9 in back_ranks and not attackers(pieces, own_color, sq)
+        ]
+        for sq in candidate_squares:
+            for piece_type in drop_piece_types:
+                entry = _check_drop_threat(copy, own_color, opp_color, sq, piece_type, needs_initial_pass)
+                if entry is not None:
+                    entry["source"] = "drop"
+                    results.append(entry)
+
+    results.extend(_board_advance_threats(copy, own_color, opp_color, needs_initial_pass))
+    return results
+
+
+def _board_advance_threats(
+    copy: cshogi.Board, own_color: int, opp_color: int, needs_initial_pass: bool
+) -> list[dict]:
+    """盤上に既にある相手の未成りの飛・角が、次の一手で自陣3段目以内へ
+    移動かつ成ることで§17.1のパターンA〜Dを実現できるかを判定する(§21.1)。
+    _find_followup_threat/_classify_followupの判定ロジックを、「打ち込み直後」
+    ではなく「盤上の駒がそのまま前進」する場合に適用する。既に成っている駒
+    (龍・馬)は「成り込み」の前提に該当しないため対象外。
+    """
+    pieces = copy.pieces
+    opp_is_white = opp_color == cshogi.WHITE
+    back_ranks = (6, 7, 8) if own_color == cshogi.BLACK else (0, 1, 2)
+    targets = [
+        sq for sq, code in enumerate(pieces)
+        if code and (code >= _WHITE_OFFSET) == opp_is_white
+        and (code % _WHITE_OFFSET) in (cshogi.ROOK, cshogi.BISHOP)  # 未成りのみ
+    ]
+    if not targets:
         return []
 
-    pieces = copy.pieces
-    back_ranks = (6, 7, 8) if own_color == cshogi.BLACK else (0, 1, 2)
-    candidate_squares = [
-        sq for sq in range(81)
-        if pieces[sq] == 0 and sq % 9 in back_ranks and not attackers(pieces, own_color, sq)
-    ]
-
-    results = []
-    for sq in candidate_squares:
-        for piece_type in drop_piece_types:
-            entry = _check_drop_threat(copy, own_color, opp_color, sq, piece_type, needs_initial_pass)
-            if entry is not None:
-                results.append(entry)
-    return results
+    if needs_initial_pass:
+        copy.push_pass()
+    try:
+        results = []
+        for sq in targets:
+            matched: set[str] = set()
+            example_move: Optional[int] = None
+            for m in copy.legal_moves:
+                if cshogi.move_from(m) != sq:
+                    continue
+                if not cshogi.move_is_promotion(m):
+                    continue
+                if cshogi.move_to(m) % 9 not in back_ranks:
+                    continue
+                copy.push(m)
+                try:
+                    patterns = _classify_followup(copy, own_color, opp_color, m)
+                finally:
+                    copy.pop()
+                if patterns:
+                    matched.update(patterns)
+                    if example_move is None:
+                        example_move = m
+            if matched:
+                piece_type = pieces[sq] % _WHITE_OFFSET
+                results.append({
+                    "square": square_name(sq),
+                    "piece": PIECE_NAMES[piece_type],
+                    "source": "board",
+                    "patterns": sorted(matched),
+                    "example_move_usi": cshogi.move_to_usi(example_move),
+                })
+        return results
+    finally:
+        if needs_initial_pass:
+            copy.pop_pass()
 
 
 def _check_drop_threat(
