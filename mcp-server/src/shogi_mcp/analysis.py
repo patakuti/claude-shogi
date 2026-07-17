@@ -364,22 +364,33 @@ def _fork_targets(pieces_now: list[int], attacker_color: int, defender_color: in
     return targets
 
 
-def major_piece_fork_opportunities(board: cshogi.Board, color: Optional[int] = None) -> list[dict]:
+def major_piece_fork_opportunities(
+    board: cshogi.Board, color: Optional[int] = None, include_checks: bool = False
+) -> list[dict]:
     """colorの持ち駒にある飛・角の打ち込み、または盤上の未成りの飛・角の移動が、
-    単純な両取り(王手も成りも伴わない)になる機会の一覧(§24.1)。boardは攻撃側の
-    局面。盤面は変更しない。
+    両取りになる機会の一覧(§24.1、include_checksは§25.1)。boardは攻撃側の局面。
+    盤面は変更しない。
 
-    colorは攻撃側(省略時はboard.turn)。王手・成りを伴う手は対象外(王手を伴う
-    両取りはallows_mate/check_evasionsの範疇、成り込みを伴う打ち込みは
-    major_piece_drop_threatsの範疇であり、本関数は両者と重複しない「単純な
-    両取り」のみを対象とする)。
+    colorは攻撃側(省略時はboard.turn)。成りを伴う手は対象外(成り込みを伴う
+    打ち込みはmajor_piece_drop_threatsの範疇であり、本関数はそれと重複しない
+    両取りのみを対象とする)。
+
+    include_checks(既定False)がFalseのとき、王手を伴う手も対象外(王手を伴う
+    両取りはallows_mate/check_evasionsの範疇として除外する、§24.1)。Trueのとき
+    その除外のみを外し、王手と同時に成立する両取りも対象に含める(§25.1: `allows_mate`
+    は強制詰みのみを検出するため、「詰みには至らないが王手と両取りが同時に成立し
+    駒得される」パターンを拾うために使う)。王手を伴う場合、玉への当たり(王手
+    そのもの)を1駒分の当たりとして数え、_fork_targets(玉を除く)が返す玉以外の
+    当たり駒が1つ以上あれば「王手+もう1駒への当たり」を両取りとして採用する
+    (玉以外2駒以上を要求する非王手時とは必要数が異なる。実戦で確認された
+    「王手をかけながら別の駒にも当たる」パターンを漏れなく拾うための調整、
+    games/2026-07-17_074805.kif 32手目△６六角打が該当する実例)。
 
     判定は_classify_followup(§17.1)と同じ「動かした駒自身の利きが新たに
     当たっている、かつ紐(自分の利き)が付いていない相手の駒(玉を除く)」の
-    集計(_fork_targets)を行い、該当する駒が2つ以上あれば両取りとして採用する。
-    既知の限界: 動かした駒自身の利き以外による当たりは対象外、紐が1つでも
-    あればその駒は対象から外れる(ピン・取り合いの最終損得は考慮しない)。
-    王手中は空リスト。
+    集計(_fork_targets)を行う。既知の限界: 動かした駒自身の利き以外による
+    当たりは対象外、紐が1つでもあればその駒は対象から外れる(ピン・取り合いの
+    最終損得は考慮しない)。王手中は空リスト。
     """
     if board.is_check():
         return []
@@ -404,12 +415,14 @@ def major_piece_fork_opportunities(board: cshogi.Board, color: Optional[int] = N
         for m in candidates:
             copy.push(m)
             try:
-                if copy.is_check():
+                gives_check = copy.is_check()
+                if gives_check and not include_checks:
                     continue
                 targets = _fork_targets(copy.pieces, own_color, opp_color, cshogi.move_to(m))
             finally:
                 copy.pop()
-            if len(targets) < 2:
+            min_targets = 1 if gives_check else 2
+            if len(targets) < min_targets:
                 continue
             is_drop = cshogi.move_is_drop(m)
             piece_type = cshogi.move_drop_hand_piece(m) if is_drop else cshogi.move_from_piece_type(m)
@@ -662,6 +675,7 @@ def analyze(board: cshogi.Board, mate_ply: int = 7, threat_ply: int = DEFAULT_MA
         "major_piece_drop_threats": major_piece_drop_threats(copy),
         "trapped_major_pieces": trapped_major_pieces(copy),
         "major_piece_fork_opportunities": major_piece_fork_opportunities(copy),
+        "major_piece_attacked_squares": major_piece_attacked_squares(copy),
         "king_safety": king_safety,
     }
 
@@ -735,6 +749,15 @@ def verify_moves(
     静止探索での追加の取り合いにより発生しうる、実戦局面で確認済み)。
     その場合はfind_mate_threatを呼ぶと逆方向の判定になってしまうため、
     mate_threat_after_pvはnullを返す(見逃しうる、隠さず文書化する)。
+    opponent_fork_threats_after(§25.1)は、この手をpushした直後(応手を読む前、
+    major_piece_drop_threats_afterと同じ時点)の局面に対する
+    major_piece_fork_opportunities(相手視点、include_checks=True)。非空なら、
+    この手を指した直後に相手の飛・角が王手を伴う両取りを成立させられることを
+    示す(§24.1のmajor_piece_fork_opportunitiesは既定で王手を伴う手を除外して
+    いるが、ここではその除外を外すことで「詰みには至らないが王手と両取りが
+    同時に成立する」パターンも拾う)。既知の限界は§24.1と同じ(動かした駒
+    自身の利き以外による当たりは対象外、紐が1つでもあれば対象から外れる)。
+    is_mateの候補には付けない。
     """
     results = []
     for usi in usi_moves:
@@ -797,6 +820,11 @@ def verify_moves(
         entry["major_piece_drop_threats_after"] = major_piece_drop_threats(copy, color=mover_color)
         entry["trapped_major_pieces_after"] = trapped_major_pieces(copy, color=mover_color)
         entry["own_trapped_major_pieces_after"] = trapped_major_pieces(copy, color=opponent_color)
+        # §25.1: この手を指した直後、相手の飛・角が王手両取りを成立させられるか。
+        # copy.turnは既にopponent_color(候補手をpush直後)なのでpush_passは不要。
+        entry["opponent_fork_threats_after"] = major_piece_fork_opportunities(
+            copy, color=opponent_color, include_checks=True
+        )
 
         searcher = _Searcher(copy, node_limit)
         score, pv, completed_depth = _iterative_deepen(searcher, depth)
@@ -1150,6 +1178,56 @@ def _escapes_safely(copy: cshogi.Board, own_color: int, move: int) -> bool:
         return not attackers(copy.pieces, own_color, dest)
     finally:
         copy.pop()
+
+
+def major_piece_attacked_squares(board: cshogi.Board, color: Optional[int] = None) -> list[dict]:
+    """colorから見て、相手の飛・角(成りを含む: 龍・馬)が現在利いている升目の
+    一覧(§25.3)。boardは防御側の局面。盤面は変更しない。
+
+    colorは防御側(省略時はboard.turn、major_piece_drop_threatsと同じ既定の
+    向き)。攻撃側はcolorの反対側。対象は攻撃側の盤上にある未成り・成り済みを
+    問わない飛・角(龍・馬を含む点が§21.1/§24.1と異なる。利き筋の可視化その
+    ものが目的であり、成り込み判定ではないため対象を絞る理由がない)。
+
+    走り利きのみを対象とする(龍・馬の隣接8方向への追加の1マス利きは対象外)。
+    既存の_RAY_PATHS(§13.2)を対象駒自身の升目を起点に流用し、飛・龍は縦横
+    4方向、角・馬は斜め4方向の経路のみを使って、盤端または最初の駒(遮蔽物、
+    自分の駒でも相手の駒でも利きはそこで止まる)までの全マスを「利きが
+    通っている」対象として収集する(遮蔽物の升目自体は含み、その先は含まない)。
+    同じ升目が複数の大駒から利いている場合は複数エントリになる。
+
+    既知の限界: 静的な利き筋の可視化のみであり、ピン・その升目に自分の駒を
+    置いた場合の取り合いの最終損得までは判定しない(候補手自体の安全性は
+    引き続きverify_movesのdestination/own_attacked_afterで確認する必要が
+    ある)。push_passを使わない静的な走査のため、王手中でも通常どおり計算する
+    (king_safety(§22.4)と同じ理由)。
+    """
+    pieces = board.pieces
+    defender_color = color if color is not None else board.turn
+    attacker_color = cshogi.WHITE if defender_color == cshogi.BLACK else cshogi.BLACK
+    attacker_is_white = attacker_color == cshogi.WHITE
+
+    results = []
+    for psq, code in enumerate(pieces):
+        if code == 0 or (code >= _WHITE_OFFSET) != attacker_is_white:
+            continue
+        piece_type = code % _WHITE_OFFSET
+        if piece_type not in _MAJOR_PIECE_TYPES:
+            continue
+        attacker_square = square_name(psq)
+        piece_name = PIECE_NAMES[piece_type]
+        for path, vec in _RAY_PATHS[psq]:
+            if vec not in _RAY_SETS[code]:
+                continue
+            for tsq in path:
+                results.append({
+                    "square": square_name(tsq),
+                    "piece": piece_name,
+                    "attacker_square": attacker_square,
+                })
+                if pieces[tsq] != 0:
+                    break
+    return results
 
 
 def simulate_line(board: cshogi.Board, usi_moves: list[str]) -> dict:

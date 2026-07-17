@@ -693,6 +693,7 @@ def test_verify_moves_is_mate_candidate_has_no_destination():
     assert "own_king_shelter_after" not in entry  # (d) §22.6
     assert "own_attacked_after_pv" not in entry  # §24.5
     assert "mate_threat_after_pv" not in entry  # §24.5
+    assert "opponent_fork_threats_after" not in entry  # (d) §25.5
 
 
 # --- verify_movesのown_trapped_major_pieces_after(§21.2, §21.4(f)(g)) ----------
@@ -722,6 +723,57 @@ def test_verify_moves_own_trapped_major_pieces_after_empty_on_safe_candidate():
     board.set_sfen(OWN_TRAPPED_AFTER_SAFE_SFEN)
     (entry,) = analysis.verify_moves(board, ["B*5g"])
     assert entry["own_trapped_major_pieces_after"] == []
+
+
+# --- verify_movesのopponent_fork_threats_after(§25.1, §25.5(c)(d)) -----------
+
+# games/2026-07-17_074805.kif 31手目相当(黒の8i7gの直前)の実戦再現。
+# 候補8i7g(黒桂が7七のと金を取る)を指した直後、白は持ち駒の角をB*6fに打つと
+# 王手であると同時に着地したばかりの黒桂7七に当たる(玉以外の当たりは1駒のみ
+# だが、王手そのものを1駒分の当たりとして数えるため両取りとして検出される)。
+OPPONENT_FORK_THREAT_REAL_GAME_SFEN = (
+    "ln1gkgsnl/3r5/ppp1pp1p1/6p1p/7P1/2P1P4/PP+p2PP1P/4SK1R1/LN3GSNL b BSbgp 31"
+)
+
+# 上と同型だが白の持ち駒から角を除いた形: 王手両取りが成立しないこと。
+OPPONENT_FORK_THREAT_NONE_SFEN = (
+    "ln1gkgsnl/3r5/ppp1pp1p1/6p1p/7P1/2P1P4/PP+p2PP1P/4SK1R1/LN3GSNL b BSgp 31"
+)
+
+
+def test_verify_moves_opponent_fork_threats_after_detects_check_and_capture():
+    # (c) 候補手を指した直後、相手の角打ちが王手と同時に別の駒への当たりを
+    # 成立させる実戦局面(§25.5(c))。
+    board = cshogi.Board()
+    board.set_sfen(OPPONENT_FORK_THREAT_REAL_GAME_SFEN)
+    (entry,) = analysis.verify_moves(board, ["8i7g"])
+    threat = next(
+        (e for e in entry["opponent_fork_threats_after"] if e["example_move_usi"] == "B*6f"),
+        None,
+    )
+    assert threat is not None
+    assert threat["piece"] == "角"
+    assert threat["source"] == "drop"
+    assert {t["square"] for t in threat["targets"]} == {"7七"}
+
+
+def test_verify_moves_opponent_fork_threats_after_empty_without_bishop_in_hand():
+    # (c) 相手が角を持っていない場合、角打ちによる王手両取りは成立しないこと
+    # (盤上の飛車移動による、王手を伴わない別種の両取りは対象外のため残る)。
+    board = cshogi.Board()
+    board.set_sfen(OPPONENT_FORK_THREAT_NONE_SFEN)
+    (entry,) = analysis.verify_moves(board, ["8i7g"])
+    assert not any(e["example_move_usi"] == "B*6f" for e in entry["opponent_fork_threats_after"])
+
+
+def test_verify_moves_opponent_fork_threats_after_excludes_default_check_only():
+    # (c) 既定(include_checks=False)のmajor_piece_fork_opportunitiesでは
+    # 同じ手が王手のため対象外になること(opponent_fork_threats_afterとの対比)。
+    board = cshogi.Board()
+    board.set_sfen(OPPONENT_FORK_THREAT_REAL_GAME_SFEN)
+    board.push(board.move_from_usi("8i7g"))
+    result = analysis.major_piece_fork_opportunities(board, color=cshogi.WHITE)
+    assert not any(e["example_move_usi"] == "B*6f" for e in result)
 
 
 # --- verify_movesのown_king_shelter_after(§22.2, §22.6(b)(c)(e)) --------------
@@ -1460,6 +1512,159 @@ def test_major_piece_fork_opportunities_real_game_36th_move():
     assert entry["piece"] == "角"
     assert entry["source"] == "drop"
     assert {t["square"] for t in entry["targets"]} == {"7三", "8六"}
+
+
+def test_major_piece_fork_opportunities_include_checks_true_counts_king_as_target():
+    # (a)(b) §25.1: include_checks=True かつ王手の場合、玉への当たり(王手)を
+    # 1駒分として数え、玉以外の当たりが1つ(7七桂)でも両取りとして採用すること。
+    board = cshogi.Board()
+    board.set_sfen(OPPONENT_FORK_THREAT_REAL_GAME_SFEN)
+    board.push(board.move_from_usi("8i7g"))
+    result = analysis.major_piece_fork_opportunities(board, color=cshogi.WHITE, include_checks=True)
+    entry = next(e for e in result if e["example_move_usi"] == "B*6f")
+    assert entry["piece"] == "角"
+    assert entry["source"] == "drop"
+    assert {t["square"] for t in entry["targets"]} == {"7七"}
+
+
+def test_major_piece_fork_opportunities_include_checks_false_still_needs_two_targets():
+    # (a) 王手を伴わない手はinclude_checks=Trueでも従来どおり玉以外2駒以上が必要
+    # (既存の非王手ケースの回帰確認、include_checksの値によらず不変)。
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_SINGLE_TARGET_SFEN)
+    assert analysis.major_piece_fork_opportunities(board, include_checks=True) == []
+
+
+# --- major_piece_attacked_squares(§25.3) -------------------------------------
+
+# 飛車の走り利き検証用: 先手飛5五が空の盤上に単独。四方への走り利きのみで、
+# 隣接1マスの追加利き(飛車にはそもそも存在しない)との混同がないことを確認する。
+ATTACKED_SQUARES_ROOK_SFEN = "4k4/9/9/9/4R4/9/9/9/4K4 b - 1"
+
+# 角の走り利き検証用: 先手角5五が空の盤上に単独。斜め4方向の走り利きのみ。
+ATTACKED_SQUARES_BISHOP_SFEN = "4k4/9/9/9/4B4/9/9/9/4K4 b - 1"
+
+# 龍の走り利き検証用: 先手龍(成り済み飛車)5五。縦横4方向の走り利きのみを対象とし、
+# 隣接8方向への追加の1マス利き(斜め4方向)は対象外であること。
+ATTACKED_SQUARES_DRAGON_SFEN = "4k4/9/9/9/4+R4/9/9/9/4K4 b - 1"
+
+# 馬の走り利き検証用: 先手馬(成り済み角)5五。斜め4方向の走り利きのみを対象とし、
+# 隣接8方向への追加の1マス利き(縦横4方向)は対象外であること。
+ATTACKED_SQUARES_HORSE_SFEN = "4k4/9/9/9/4+B4/9/9/9/4K4 b - 1"
+
+# 遮蔽物検証用: 先手飛5五の上方向2マス先(5三)に後手歩、下方向1マス先(5六)に
+# 先手歩を配置。いずれの方向も遮蔽物の升目までを含み、その先は含まないこと。
+ATTACKED_SQUARES_BLOCKED_SFEN = "4k4/9/4p4/9/4R4/4P4/9/9/4K4 b - 1"
+
+# color省略時の向き検証用: 手番側(先手)から見て、相手(後手)の角5五の利きを
+# 対象とすること(major_piece_drop_threatsと同じ既定の向き、§25.3)。
+ATTACKED_SQUARES_DEFAULT_COLOR_SFEN = "4k4/9/9/9/4b4/9/9/9/4K4 b - 1"
+
+# 王手中でも通常どおり計算されることの検証用: 後手飛5gが先手玉5iを直射しつつ、
+# 後手角3七も盤上にある(IN_CHECK_SFENを流用し角を追加)。
+ATTACKED_SQUARES_IN_CHECK_SFEN = "4k4/9/9/9/9/2b6/4r4/9/4K4 b - 1"
+
+
+def test_major_piece_attacked_squares_rook_all_four_directions():
+    # (e) 飛車の走り利きが四方に正しく列挙されること。
+    board = cshogi.Board()
+    board.set_sfen(ATTACKED_SQUARES_ROOK_SFEN)
+    result = analysis.major_piece_attacked_squares(board, color=cshogi.WHITE)
+    squares = {e["square"] for e in result}
+    assert squares == {
+        "5四", "5三", "5二", "5一", "5六", "5七", "5八", "5九",
+        "4五", "3五", "2五", "1五", "6五", "7五", "8五", "9五",
+    }
+    assert all(e["piece"] == "飛" and e["attacker_square"] == "5五" for e in result)
+
+
+def test_major_piece_attacked_squares_bishop_all_four_diagonals():
+    # (e) 角の走り利きが斜め4方向に正しく列挙されること。
+    board = cshogi.Board()
+    board.set_sfen(ATTACKED_SQUARES_BISHOP_SFEN)
+    result = analysis.major_piece_attacked_squares(board, color=cshogi.WHITE)
+    squares = {e["square"] for e in result}
+    assert squares == {
+        "4四", "3三", "2二", "1一", "4六", "3七", "2八", "1九",
+        "6四", "7三", "8二", "9一", "6六", "7七", "8八", "9九",
+    }
+    assert all(e["piece"] == "角" for e in result)
+
+
+def test_major_piece_attacked_squares_dragon_excludes_diagonal_single_step():
+    # (f) 龍の隣接1マスの斜め利きは対象外で、縦横の走り利きのみ列挙されること。
+    board = cshogi.Board()
+    board.set_sfen(ATTACKED_SQUARES_DRAGON_SFEN)
+    result = analysis.major_piece_attacked_squares(board, color=cshogi.WHITE)
+    squares = {e["square"] for e in result}
+    assert squares == {
+        "5四", "5三", "5二", "5一", "5六", "5七", "5八", "5九",
+        "4五", "3五", "2五", "1五", "6五", "7五", "8五", "9五",
+    }
+    assert "4四" not in squares and "6六" not in squares
+    assert all(e["piece"] == "龍" for e in result)
+
+
+def test_major_piece_attacked_squares_horse_excludes_orthogonal_single_step():
+    # (f) 馬の隣接1マスの縦横利きは対象外で、斜めの走り利きのみ列挙されること。
+    board = cshogi.Board()
+    board.set_sfen(ATTACKED_SQUARES_HORSE_SFEN)
+    result = analysis.major_piece_attacked_squares(board, color=cshogi.WHITE)
+    squares = {e["square"] for e in result}
+    assert squares == {
+        "4四", "3三", "2二", "1一", "4六", "3七", "2八", "1九",
+        "6四", "7三", "8二", "9一", "6六", "7七", "8八", "9九",
+    }
+    assert "5四" not in squares and "5六" not in squares
+    assert all(e["piece"] == "馬" for e in result)
+
+
+def test_major_piece_attacked_squares_stops_at_first_blocker_inclusive():
+    # (e) 遮蔽物の升目自体は含み、その先の升目は含まないこと(自駒・相手駒とも)。
+    board = cshogi.Board()
+    board.set_sfen(ATTACKED_SQUARES_BLOCKED_SFEN)
+    result = analysis.major_piece_attacked_squares(board, color=cshogi.WHITE)
+    squares = {e["square"] for e in result}
+    assert "5四" in squares  # 遮蔽物手前の空きマスは含む
+    assert "5三" in squares  # 後手歩(遮蔽物)の升目自体は含む
+    assert "5二" not in squares and "5一" not in squares  # 遮蔽物より先は含まない
+    assert "5六" in squares  # 先手歩(遮蔽物)の升目自体は含む
+    assert "5七" not in squares and "5八" not in squares and "5九" not in squares
+
+
+def test_major_piece_attacked_squares_color_param_defaults_to_side_to_move():
+    # (g) colorを省略すると手番側から見た相手の大駒を対象とすること。
+    board = cshogi.Board()
+    board.set_sfen(ATTACKED_SQUARES_DEFAULT_COLOR_SFEN)
+    result = analysis.major_piece_attacked_squares(board)
+    assert result  # 手番側(先手)から見て後手角の利きが列挙される
+    assert all(e["piece"] == "角" for e in result)
+
+
+def test_major_piece_attacked_squares_computed_normally_while_in_check():
+    # (g) 王手中でも通常どおり計算されること(push_passを使わない静的な走査のため)。
+    board = cshogi.Board()
+    board.set_sfen(ATTACKED_SQUARES_IN_CHECK_SFEN)
+    assert board.is_check()
+    result = analysis.major_piece_attacked_squares(board)
+    pieces = {e["piece"] for e in result}
+    assert pieces == {"飛", "角"}
+
+
+def test_major_piece_attacked_squares_does_not_mutate_board():
+    board = cshogi.Board()
+    board.set_sfen(ATTACKED_SQUARES_BLOCKED_SFEN)
+    before = board.sfen()
+    analysis.major_piece_attacked_squares(board)
+    assert board.sfen() == before
+
+
+def test_analyze_includes_major_piece_attacked_squares():
+    board = cshogi.Board()
+    board.set_sfen(ATTACKED_SQUARES_DEFAULT_COLOR_SFEN)
+    result = analysis.analyze(board)
+    assert result["major_piece_attacked_squares"]
+    assert all(e["piece"] == "角" for e in result["major_piece_attacked_squares"])
 
 
 # --- simulate_line ----------------------------------------------------------
