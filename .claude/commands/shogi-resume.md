@@ -24,3 +24,7 @@ argument-hint: [KIFファイルパス(省略時はgames/内の最新ファイル
    - `mode` が `"user"` → `/shogi-user` と同じ進め方(ユーザーの自然言語指示を待つ)
    - `mode` が `"brain"` → `/shogi-brain` と同じ進め方(エンジンのヒントなしでClaude自身が
      考えて指す。`engine_hint`は呼ばず、`analyze_position` / `verify_moves` / `simulate_line`を使う)
+   - `mode` が `"csa"` → `/shogi-csa` と同じ進め方(ユーザー側はCSA対応クライアントから、
+     対局相手側はClaudeが思考モードで指す)。`http://localhost:8765/`に加えて
+     `localhost:4081`へのCSA接続方法も一度だけ案内する(接続が切れていた場合、
+     再接続すれば続きから対局できる)。

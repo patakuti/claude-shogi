@@ -52,25 +52,33 @@ class GameMeta:
 
 # ユーザー側の対局者名(モード別)。自動/対話はエンジンヒント併用だが、
 # 手の決定主体としてClaudeと表記する(02_design.md §13.6)。
+# csa(フェーズ24): ユーザー側=CSA対応クライアント経由の人間本人(02_design.md §26.6)。
 _MODE_PLAYER_NAMES = {
     "auto": "Claude(自動)",
     "discuss": "Claude(対話)",
     "user": "ユーザー",
     "brain": "Claude(思考)",
+    "csa": "ユーザー(CSA)",
 }
 
 
 def player_names(meta: GameMeta) -> tuple[str, str]:
-    """メタ情報から(先手名, 後手名)を導出する(02_design.md §13.6, §23)。"""
+    """メタ情報から(先手名, 後手名)を導出する(02_design.md §13.6, §23, §26.6)。"""
     user_name = _MODE_PLAYER_NAMES.get(meta.mode, meta.mode)
     if meta.model_name and user_name.startswith("Claude"):
         # 「Claude(思考)」→「Claude Sonnet 5(思考)」のように、Claudeが手の決定主体の
         # モードに限りモデル名を挿入する(user modeの「ユーザー」表記は対象外)。
         user_name = "Claude " + meta.model_name + user_name[len("Claude") :]
-    engine_name = f"やねうら王 Lv{meta.difficulty}"
+    if meta.mode == "csa":
+        # csaモードは対局相手側もUSIエンジンではなくClaude(思考)が担う(§26.6)。
+        opponent_name = "Claude(思考)"
+        if meta.model_name:
+            opponent_name = "Claude " + meta.model_name + "(思考)"
+    else:
+        opponent_name = f"やねうら王 Lv{meta.difficulty}"
     if meta.user_side == "black":
-        return user_name, engine_name
-    return engine_name, user_name
+        return user_name, opponent_name
+    return opponent_name, user_name
 
 
 @dataclass(frozen=True)
