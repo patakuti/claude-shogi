@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
 import cshogi
 from mcp.server.fastmcp import FastMCP
 
-from . import analysis, gui_server, kif_store, presets, rules
+from . import analysis, csa_server, gui_server, kif_store, presets, rules
 from .usi_engine import UsiEngine, UsiEngineError, UsiTimeoutError
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ENGINE_PATH = REPO_ROOT / "engine" / "YaneuraOu-by-gcc"
 GAMES_DIR = REPO_ROOT / "games"
+
+# wait_for_user_moveの1回の呼び出し内でポーリングする最大秒数(02_design.md §26.4)。
+_WAIT_FOR_USER_MOVE_MAX_TIMEOUT = 30
 
 mcp = FastMCP("shogi")
 
@@ -40,16 +44,20 @@ class SessionState:
         # 手数(1始まり)→その手に付けるKIFコメント行(エンジン評価値・Claudeコメント、02_design.md §12)
         self.comments: dict[int, list[str]] = {}
 
-        self.engine = UsiEngine(
-            str(ENGINE_PATH),
-            options={
-                "USI_Hash": 1024,
-                "Threads": preset.threads,
-                "USI_Ponder": False,
-                "USI_OwnBook": False,
-            },
-        )
-        self.engine.start()
+        # csaモードは対局相手側もUSIエンジンではなくClaude(思考)が担うため、
+        # エンジンプロセス自体を起動しない(02_design.md §26.6)。
+        self.engine: Optional[UsiEngine] = None
+        if mode != "csa":
+            self.engine = UsiEngine(
+                str(ENGINE_PATH),
+                options={
+                    "USI_Hash": 1024,
+                    "Threads": preset.threads,
+                    "USI_Ponder": False,
+                    "USI_OwnBook": False,
+                },
+            )
+            self.engine.start()
 
         meta = kif_store.GameMeta(
             difficulty=difficulty, user_side=user_side, mode=mode, model_name=model_name
@@ -90,7 +98,8 @@ class SessionState:
         self.kif_store.save(moves, resigned=self.resigned, comments=self.comments)
 
     def close(self) -> None:
-        self.engine.quit()
+        if self.engine is not None:
+            self.engine.quit()
 
 
 _session: Optional[SessionState] = None
@@ -170,6 +179,56 @@ def _attack_report(session: SessionState) -> dict:
     }
 
 
+def _csa_snapshot() -> Optional[csa_server.GameSnapshot]:
+    """csa_server.pyへ渡す対局状態のスナップショット(02_design.md §26.2)。mode!="csa"ならNone。"""
+    with _session_lock:
+        session = _current_session()
+        if session is None or session.mode != "csa":
+            return None
+        board = session.game.board
+        black_name, white_name = session.player_names()
+        last_move_csa = None
+        if session.game.move_number() > 1:
+            last_move_csa = cshogi.move_to_csa(board.history[-1])
+        return csa_server.GameSnapshot(
+            mode=session.mode,
+            user_side=session.user_side,
+            black_name=black_name,
+            white_name=white_name,
+            csa_pos=board.csa_pos(),
+            turn=session.game.turn(),
+            move_number=session.game.move_number(),
+            status=session.status(),
+            last_move_csa=last_move_csa,
+        )
+
+
+def _submit_csa_move(raw: str) -> dict:
+    """csa_server.pyから呼ばれる、人間側の指し手(符号なしCSA表記、または"%TORYO")の反映。
+
+    csa_server.py自身はSessionState/rules.Gameに依存しないため、CSA→USI変換と
+    session操作はこちらで行う(02_design.md §26.5)。CSA形式の合法性検証は
+    board.move_from_csa() + board.is_legal()に委譲する(既存のapply_moveがUSI表記で
+    move_from_usi() + is_legal()を使うのと同じパターン、rules.Game.apply_move参照)。
+    """
+    with _session_lock:
+        session = _current_session()
+        if session is None or session.mode != "csa":
+            return {"ok": False, "error": "no_active_csa_game"}
+        if session.status() != rules.STATUS_PLAYING:
+            return {"ok": False, "error": "game_already_over"}
+        if raw == "%TORYO":
+            session.resigned = True
+            session.autosave()
+            return {"ok": True}
+        board = cshogi.Board(session.game.sfen())
+        move = board.move_from_csa(raw)
+        if move == 0 or not board.is_legal(move):
+            return {"ok": False, "error": "illegal_csa_move"}
+        usi = cshogi.move_to_usi(move)
+        return _apply_validated_move(session, usi)
+
+
 def _eval_comment_line(primary, mover: str) -> Optional[str]:
     """engine_moveの思考結果からKIFコメント用の評価値行を作る(02_design.md §12.2)。
 
@@ -210,10 +269,15 @@ def new_game(
     """新規対局を開始する。difficultyは1(入門)〜5(最強)、user_sideは"black"/"white"。
 
     対局中の場合は現在の対局を破棄して新規対局を開始する(直前まではKIFに自動保存済み)。
-    model_nameは手の決定主体がClaude自身のモード(auto/discuss/brain)で、Claude自身の
+    model_nameは手の決定主体がClaude自身のモード(auto/discuss/brain/csa)で、Claude自身の
     モデル名(例:"Sonnet 5")を渡すとKIFの対局者名に含める(例:「Claude Sonnet 5(思考)」)。
     MCPサーバー側ではモデル名を自動判別できないため呼び出し側の自己申告に依存する。
     空文字(既定)なら従来どおりモデル名なしの表記のまま(§23)。
+    mode="csa"(フェーズ24)はUSIエンジンを起動しない特殊モード:
+    ユーザー側=CSA対応クライアント経由の人間本人(localhost:4081へのCSA接続、
+    `wait_for_user_move`で反映)、対局相手側=Claude自身(思考モードと同じロジック)。
+    difficultyはこのモードでは無視される(§26.6)。engine_move/engine_hintは
+    このモードでは使えない。
     """
     global _session
     if user_side not in ("black", "white"):
@@ -222,7 +286,7 @@ def new_game(
         presets.get(difficulty)
     except ValueError as e:
         return {"ok": False, "error": str(e)}
-    if mode not in ("auto", "discuss", "user", "brain"):
+    if mode not in ("auto", "discuss", "user", "brain", "csa"):
         return {"ok": False, "error": "invalid_mode"}
 
     with _session_lock:
@@ -246,6 +310,28 @@ def get_state() -> dict:
         return _state_dict(session)
 
 
+def _apply_validated_move(session: SessionState, move: str, comment: str = "") -> dict:
+    """指し手(USI表記)の合法性チェック→盤面反映→自動保存→attack_report生成。
+
+    呼び出し元は`_session_lock`を保持済みであること。`apply_move`MCPツール、および
+    csa_server.py(人間側からCSAプロトコル経由で届いた指し手)の両方から呼ばれる
+    共有ヘルパー(02_design.md §26.5。重複実装によるロジックのズレを避けるため)。
+    """
+    result = session.game.apply_move(move)
+    if not result.ok:
+        return {
+            "ok": False,
+            "error": result.error,
+            "candidates": [_move_info(m) for m in (result.candidates or [])],
+        }
+    if comment:
+        session.add_comment_lines(session.last_move_number(), [comment])
+    session.autosave()
+    state = _state_dict(session)
+    state["attack_report"] = _attack_report(session)
+    return state
+
+
 @mcp.tool()
 def apply_move(move: str, comment: str = "") -> dict:
     """指し手(USI表記, 例: 7g7f / P*5e / 2b3a+)を適用する。ユーザー側・Claude側共通で使う。
@@ -263,19 +349,48 @@ def apply_move(move: str, comment: str = "") -> dict:
         return {"ok": False, "error": "game_already_over"}
 
     with _session_lock:
-        result = session.game.apply_move(move)
-        if not result.ok:
-            return {
-                "ok": False,
-                "error": result.error,
-                "candidates": [_move_info(m) for m in (result.candidates or [])],
-            }
-        if comment:
-            session.add_comment_lines(session.last_move_number(), [comment])
-        session.autosave()
-        state = _state_dict(session)
-        state["attack_report"] = _attack_report(session)
-        return state
+        return _apply_validated_move(session, move, comment)
+
+
+@mcp.tool()
+def wait_for_user_move(timeout_seconds: int = 8) -> dict:
+    """CSA対局モード(mode="csa")で、人間側(CSAクライアント経由)の着手を待つ。
+
+    csa_server.pyが人間側の指し手を反映するまで、対局の手数を短い間隔でポーリングする。
+    timeout_seconds(既定8秒、上限30秒にクランプ)以内に着手があれば、apply_moveと
+    同形式の最新状態(attack_report込み)を返す。無ければ`{"ok": true, "status":
+    "waiting"}`を返す(長時間ブロックする設計は避け、呼び出し側がstatus:"waiting"で
+    ある限り繰り返し呼ぶループを回す想定。02_design.md §26.4)。
+    対局が終了(投了・詰み等)していた場合は`status: "game_over"`を含む最新状態を返す。
+    mode != "csa"のときはエラーを返す。
+    """
+    session = _current_session()
+    if session is None:
+        return {"ok": False, "error": "no_active_game"}
+    if session.mode != "csa":
+        return {"ok": False, "error": "wait_for_user_move is only valid in mode=csa"}
+
+    with _session_lock:
+        start_move_number = session.last_move_number()
+
+    deadline = time.monotonic() + max(1, min(_WAIT_FOR_USER_MOVE_MAX_TIMEOUT, timeout_seconds))
+    while time.monotonic() < deadline:
+        with _session_lock:
+            # session.is_game_over()はnyugyoku/draw_repetitionを終局に含めない
+            # (cshogiのboard.is_game_over()は詰みのみを判定するため、既存の
+            # SessionState.is_game_over()もその範囲に留まる)。CSA対局モードの
+            # 終局検知はstatus()文字列で判定し、全終局理由を漏れなく拾う。
+            if session.status() != rules.STATUS_PLAYING:
+                state = _state_dict(session)
+                state["status_wait"] = "game_over"
+                return state
+            if session.last_move_number() != start_move_number:
+                state = _state_dict(session)
+                state["attack_report"] = _attack_report(session)
+                state["status_wait"] = "moved"
+                return state
+        time.sleep(0.5)
+    return {"ok": True, "status": "waiting"}
 
 
 @mcp.tool()
@@ -292,6 +407,8 @@ def engine_move(byoyomi_ms: int = 0) -> dict:
         return {"ok": False, "error": "no_active_game"}
     if session.is_game_over():
         return {"ok": False, "error": "game_already_over"}
+    if session.engine is None:
+        return {"ok": False, "error": "engine not available in mode=csa"}
 
     preset = session.preset()
     actual_byoyomi = byoyomi_ms if byoyomi_ms > 0 else preset.byoyomi_ms
@@ -344,6 +461,8 @@ def engine_hint(multipv: int = 3, byoyomi_ms: int = 1000) -> dict:
     session = _current_session()
     if session is None:
         return {"ok": False, "error": "no_active_game"}
+    if session.engine is None:
+        return {"ok": False, "error": "engine not available in mode=csa"}
 
     session.engine.set_option("NodesLimit", 0)
     session.engine.set_option("MultiPV", multipv)
@@ -656,6 +775,7 @@ def resign() -> dict:
 
 def main() -> None:
     gui_server.start(_board_fragment, games_dir=GAMES_DIR)
+    csa_server.start(_csa_snapshot, _submit_csa_move)
     mcp.run()
 
 
