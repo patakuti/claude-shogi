@@ -107,6 +107,32 @@ Claude思考モード用の解析ツール `analyze_position` / `verify_moves` /
 `own_shelter_count`〈自玉に隣接する自分の金・銀の数〉と`opponent_hand_value`
 〈相手の持ち駒の合計価値〉)も返す。王手中でも他のフィールドと異なり空に
 ならず、通常どおり計算される(§22.4)。
+`analyze_position`は`major_piece_fork_opportunities`(手番側の持ち駒にある
+飛・角の打ち込み、または盤上の未成りの飛・角の移動が、王手も成りも伴わない
+単純な両取りになる機会の一覧([{square, piece, source, targets,
+example_move_usi}, ...]。`targets`は両取りされる相手の駒〈2件以上、玉は
+含まない〉)も返す。王手を伴う両取りは`allows_mate`/`check_evasions`の範疇、
+成り込みを伴う打ち込みは`major_piece_drop_threats`の範疇であり、本フィールドは
+両者と重複しない「単純な両取り」のみを対象とする。紐が1つでもあればその駒は
+対象から外れる(ピン・取り合いの最終損得は考慮しない)。王手中は空リスト
+(§24.1)。
+`verify_moves`の各候補には`own_attacked_after_pv`(読み筋`reply_pv_usi`を
+最後まで適用した局面に対する`attacked_pieces`〈この手を指す側視点〉の上位5件)
+も含む。`own_attacked_after`〈着手直後、応手を読む前〉には現れない、読み筋の
+途中で自分の駒に新たに生じる当たりを検出できる。`search_depth_completed == 0`
+のときは`null`(`material_change`と同じ制約)。`is_mate`の候補には付けない
+(§24.2)。
+`verify_moves`の各候補には`mate_threat_after_pv`(読み筋を最後まで適用した
+局面に対する詰めろ判定。`{found, within_ply, first_move_usi}`、詰めろなしは
+`null`)も含む。「読み筋の最後で自分が何もしなければ、相手から詰みがあるか」の
+早期警告。`reply_pv_usi`は材料点+玉の安全度ベースの浅い探索の結果であり、
+実際の相手の指し手と一致するとは限らない(`material_change`と同じ制約)。
+`mate_ply`引数をそのまま流用する。`search_depth_completed == 0`のときは
+`null`。`is_mate`の候補には付けない。既知の限界: 読み筋の総手数の偶奇に
+よっては読み筋終端の手番がこの手を指した側に戻っていないことがあり
+(反復深化の打ち切りや静止探索での追加の取り合いにより発生しうる、実戦
+局面で確認済み)、その場合は逆方向の判定になってしまうため`null`を返す
+(見逃しうる、§24.3)。
 `new_game`は`model_name`引数(既定は空文字)を受け付ける。手の決定主体が
 Claude自身のモード(自動/対話/Claude思考)でのみ、対局者名にモデル名を
 合成する(例: `model_name="Sonnet 5"` かつ思考モード →

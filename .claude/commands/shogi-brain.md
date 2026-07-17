@@ -80,6 +80,13 @@ argument-hint: [difficulty 1-5] [user_side black|white]
      `attackers: 0`(退避不可だがまだ当たっていない)の駒を見つけたら、
      利きを足す候補手を**その手番のうちに**`verify_moves`で検証すること
      (先送りにして好機を逃さない)。
+   - `major_piece_fork_opportunities` が空でなければ、その手(打ち込み・移動)を
+     候補手に含めて`verify_moves`で検証することを検討する。持ち駒の飛・角の
+     打ち込み、または盤上の未成りの飛・角の移動が、王手も成りも伴わない
+     単純な両取りになる機会を示す(`targets`が2件以上の相手の駒)。候補手を
+     自分で挙げる段階では気づけない両取りを見つけるための一覧であり、
+     `verify_moves`は渡された候補手しか検証できないため、この一覧に頼らず
+     自分だけで候補を絞ると機会を逃す。
    - `apply_move`/`engine_move`の応答に含まれる`attack_report`(`user_pieces`/
      `engine_pieces`)は**毎手番、`analyze_position`を呼ぶ前でも必ず目を通す**。
      `user_pieces`に載った駒は、解消済みと確認できるまで(逃げた・紐が付いた・
@@ -139,6 +146,16 @@ argument-hint: [difficulty 1-5] [user_side black|white]
      読み筋(`reply_pv_usi`)の途中で自玉隣接の金・銀が最前線へ釣り出され、
      玉の守備が薄くなるパターンを示す(材料点だけを見て選んだ結果、終盤の
      受けが薄くなった実例がある)。
+     `own_attacked_after_pv`が非空(特に`own_attacked_after`には無かった駒が
+     新たに現れている)候補は、`material_change`が良くても警戒する。
+     `own_attacked_after`(着手直後、応手を読む前)には現れない、読み筋の
+     途中で自分の駒に新たに生じる当たり(相手の歩打ち→と金前進のような
+     手順)を示す。
+     `mate_threat_after_pv`が非`null`の候補は、`material_change`が良くても
+     優先度を下げ、詰めろを受ける代替候補を優先的に検討する。読み筋の最後で
+     自分が何もしなければ相手から詰みがあることを示す早期警告であり、
+     `reply_pv_usi`が実際の相手の指し手と一致するとは限らない点は
+     `material_change`と同じ制約。
    - 序盤・中盤(目安: `get_state`の`move_number`等で判断)では、
      `major_piece_trade: true`の候補は`material_change`が明確なプラスでない限り
      優先度を下げる(大駒交換そのものを避ける方針)。終盤(玉の安全度で優劣が

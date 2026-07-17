@@ -343,6 +343,89 @@ def attacked_pieces(board: cshogi.Board, color: Optional[int] = None) -> list[di
     return result
 
 
+def _fork_targets(pieces_now: list[int], attacker_color: int, defender_color: int, dest: int) -> list[dict]:
+    """destに今動いた駒(attacker_color)自身の利きが新たに当たっている、かつ紐
+    (defender_color自身の利き)が付いていないdefender_colorの駒(玉を除く)一覧。
+    §17.1の_classify_followupと同じ「動かした駒自身の利き」判定をdest基準で行う。
+    """
+    defender_is_white = defender_color == cshogi.WHITE
+    targets = []
+    for tsq, code in enumerate(pieces_now):
+        if code == 0 or (code >= _WHITE_OFFSET) != defender_is_white:
+            continue
+        piece_type = code % _WHITE_OFFSET
+        if piece_type == cshogi.KING:
+            continue
+        if dest not in attackers(pieces_now, attacker_color, tsq):
+            continue  # 今動いた駒自身の利きでなければ対象外
+        if attackers(pieces_now, defender_color, tsq):
+            continue  # 紐が付いていれば対象外
+        targets.append({"square": square_name(tsq), "piece": PIECE_NAMES[piece_type]})
+    return targets
+
+
+def major_piece_fork_opportunities(board: cshogi.Board, color: Optional[int] = None) -> list[dict]:
+    """colorの持ち駒にある飛・角の打ち込み、または盤上の未成りの飛・角の移動が、
+    単純な両取り(王手も成りも伴わない)になる機会の一覧(§24.1)。boardは攻撃側の
+    局面。盤面は変更しない。
+
+    colorは攻撃側(省略時はboard.turn)。王手・成りを伴う手は対象外(王手を伴う
+    両取りはallows_mate/check_evasionsの範疇、成り込みを伴う打ち込みは
+    major_piece_drop_threatsの範疇であり、本関数は両者と重複しない「単純な
+    両取り」のみを対象とする)。
+
+    判定は_classify_followup(§17.1)と同じ「動かした駒自身の利きが新たに
+    当たっている、かつ紐(自分の利き)が付いていない相手の駒(玉を除く)」の
+    集計(_fork_targets)を行い、該当する駒が2つ以上あれば両取りとして採用する。
+    既知の限界: 動かした駒自身の利き以外による当たりは対象外、紐が1つでも
+    あればその駒は対象から外れる(ピン・取り合いの最終損得は考慮しない)。
+    王手中は空リスト。
+    """
+    if board.is_check():
+        return []
+
+    copy = _copy_board(board)
+    own_color = color if color is not None else copy.turn
+    opp_color = cshogi.WHITE if own_color == cshogi.BLACK else cshogi.BLACK
+    needs_pass = copy.turn != own_color
+    if needs_pass:
+        copy.push_pass()
+    try:
+        candidates = [
+            m for m in copy.legal_moves
+            if not cshogi.move_is_promotion(m)
+            and (
+                cshogi.move_drop_hand_piece(m) in (cshogi.ROOK, cshogi.BISHOP)
+                if cshogi.move_is_drop(m)
+                else cshogi.move_from_piece_type(m) in (cshogi.ROOK, cshogi.BISHOP)
+            )
+        ]
+        results = []
+        for m in candidates:
+            copy.push(m)
+            try:
+                if copy.is_check():
+                    continue
+                targets = _fork_targets(copy.pieces, own_color, opp_color, cshogi.move_to(m))
+            finally:
+                copy.pop()
+            if len(targets) < 2:
+                continue
+            is_drop = cshogi.move_is_drop(m)
+            piece_type = cshogi.move_drop_hand_piece(m) if is_drop else cshogi.move_from_piece_type(m)
+            results.append({
+                "square": square_name(cshogi.move_to(m)),
+                "piece": PIECE_NAMES[piece_type],
+                "source": "drop" if is_drop else "board",
+                "targets": targets,
+                "example_move_usi": cshogi.move_to_usi(m),
+            })
+        return results
+    finally:
+        if needs_pass:
+            copy.pop_pass()
+
+
 def check_evasions(board: cshogi.Board, threat_ply: int = DEFAULT_MATE_PLY) -> dict:
     """王手中の詰めろ検出(§13.4): 各回避手の後に相手からの詰みが残るかを個別に調べる。
 
@@ -578,6 +661,7 @@ def analyze(board: cshogi.Board, mate_ply: int = 7, threat_ply: int = DEFAULT_MA
         "attacked_pieces": attacked_pieces(copy),
         "major_piece_drop_threats": major_piece_drop_threats(copy),
         "trapped_major_pieces": trapped_major_pieces(copy),
+        "major_piece_fork_opportunities": major_piece_fork_opportunities(copy),
         "king_safety": king_safety,
     }
 
@@ -634,6 +718,23 @@ def verify_moves(
     (material_changeがnullになる場合と同じ扱い)。is_mateの候補には付けない。
     mate_ply(§22.3)は着手直後の局面でallows_mateを判定する詰み探索の深さ。
     既定はDEFAULT_MATE_PLY(5)。
+    own_attacked_after_pv(§24.2)は、読み筋(reply_pv_usi)を最後まで適用した
+    局面に対するattacked_pieces(mover_color視点)の上位5件。own_attacked_after
+    (着手直後、応手を読む前)には現れない、読み筋の途中で自分の駒に新たに
+    生じる当たりを検出できる。search_depth_completed == 0の場合はnull
+    (material_changeがnullになる場合と同じ扱い)。is_mateの候補には付けない。
+    mate_threat_after_pv(§24.3)は、読み筋を最後まで適用した局面に対する
+    find_mate_threat(mate_ply)の結果({found, within_ply, first_move_usi}、
+    詰めろなしはnull)。「読み筋の最後で自分が何もしなければ、相手から
+    詰みがあるか」の早期警告。reply_pv_usiは材料点+玉の安全度ベースの浅い
+    探索の結果であり、実際の相手の指し手と一致するとは限らない
+    (material_changeと同じ制約)。search_depth_completed == 0の場合はnull。
+    is_mateの候補には付けない。
+    既知の限界: 読み筋の総手数の偶奇によっては、読み筋終端の手番がこの手を
+    指した側に戻っていない(相手の手番のまま)ことがある(反復深化の打ち切り・
+    静止探索での追加の取り合いにより発生しうる、実戦局面で確認済み)。
+    その場合はfind_mate_threatを呼ぶと逆方向の判定になってしまうため、
+    mate_threat_after_pvはnullを返す(見逃しうる、隠さず文書化する)。
     """
     results = []
     for usi in usi_moves:
@@ -706,6 +807,8 @@ def verify_moves(
             entry["reply_pv_usi"] = []
             # pvが空(読み筋が信頼できない)なので候補手自体の捕り駒のみで判定する(§16.1)。
             entry["major_piece_trade"] = _captures_major_piece([move])
+            entry["own_attacked_after_pv"] = None
+            entry["mate_threat_after_pv"] = None
         else:
             # PVを適用した局面の実材料点差からmaterial_changeを算出(§13.5)
             for m in pv:
@@ -720,6 +823,30 @@ def verify_moves(
             entry["own_king_shelter_after"]["after_pv"] = _king_shelter_count(
                 copy.pieces, mover_color, copy.king_square(mover_color)
             )
+            # §24.2: 読み筋終端(手番はこの手を指した側=mover_colorに戻っている)の自駒への当たり。
+            entry["own_attacked_after_pv"] = attacked_pieces(copy, color=mover_color)[:5]
+            # §24.3: 読み筋終端で、この手を指した側が何もしなければ相手から詰みがあるか。
+            # find_mate_threatはboard.turn側が「何もしなければ」を仮定するため、
+            # 読み筋終端でcopy.turn == mover_colorのとき(読み筋の総手数が奇数、
+            # 手番がこの手を指した側に戻っている)のみ意味のある判定になる。
+            # 読み筋の総手数が偶数(反復深化の打ち切りや静止探索での追加の
+            # 取り合いにより発生しうる、実戦局面で確認済み)だとcopy.turnは
+            # 相手側のままで、その場合にfind_mate_threatを呼ぶと逆方向
+            # (相手が何もしなければこの手を指した側が詰ませられるか)を
+            # 判定してしまうため、その場合はnullとする(既知の限界)。
+            if copy.turn == mover_color:
+                threat_after_pv = find_mate_threat(copy, mate_ply)
+            else:
+                threat_after_pv = None
+            if threat_after_pv is not None:
+                threat_move, threat_ply_found = threat_after_pv
+                entry["mate_threat_after_pv"] = {
+                    "found": True,
+                    "within_ply": threat_ply_found,
+                    "first_move_usi": cshogi.move_to_usi(threat_move),
+                }
+            else:
+                entry["mate_threat_after_pv"] = None
         results.append(entry)
     return results
 

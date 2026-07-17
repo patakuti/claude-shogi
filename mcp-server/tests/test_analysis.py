@@ -94,6 +94,46 @@ PV_CAPTURES_OWN_ROOK_SFEN = "4k4/9/8r/9/8R/9/P8/9/4K4 b - 1"
 # 候補手自体が後手の龍(成駒)を直取り(5五飛→5三)。
 CAPTURE_DRAGON_SFEN = "4k4/9/4+r4/9/4R4/9/9/9/4K4 b - 1"
 
+# major_piece_fork_opportunities(§24.1)検証用 -------------------------------
+
+# 両取り成立: 先手持ち駒の角を4四・5五・6六のいずれに打っても、同一の斜線上に
+# ある後手飛3三と後手金7七の両方に当たり、いずれにも紐がない。
+FORK_OPPORTUNITY_DROP_SFEN = "1k7/9/6r2/9/9/9/2g6/9/4K4 b B 1"
+
+# 当たる駒が1つのみ(後手飛3三のみ、後手金なし): 両取りにならない。
+FORK_OPPORTUNITY_SINGLE_TARGET_SFEN = "1k7/9/6r2/9/9/9/9/9/4K4 b B 1"
+
+# 両方に紐が付いている(後手飛3三は後手金4二、後手金7七は後手金7八に守られる): 両取り対象外。
+FORK_OPPORTUNITY_BOTH_DEFENDED_SFEN = "1k7/5g3/6r2/9/9/9/2g6/2g6/4K4 b B 1"
+
+# 盤上の角(9九、不成)が2二へ移動して後手飛1三・後手金3一の両取りが成立する形。
+# 2二は先手の成り込みゾーン(1-3段目)内だが、成る手は対象外で不成のみ検出されること。
+FORK_OPPORTUNITY_BOARD_MOVE_SFEN = "k5g2/9/8r/9/9/9/9/9/B3K4 b - 1"
+
+# 上と同型だが白玉を1一に置き、同じ手(9九2二)が王手を伴うようにした形: 対象外。
+FORK_OPPORTUNITY_GIVES_CHECK_SFEN = "6g1k/9/8r/9/9/9/9/9/B3K4 b - 1"
+
+# games/2026-07-16_074057.kif 36手目相当(白の8b8fの直後、黒の37手目の直前)の
+# 実戦再現。B*9eが後手桂7三・後手飛8六の両取りになる(振り返りで判明した見落とし)。
+FORK_OPPORTUNITY_REAL_GAME_SFEN = (
+    "l4gsnl/4g1k2/p1n1pp1p1/2p1s1p2/3P4p/1rP1SPP2/P1N1PG1PP/3R2SK1/L4G1NL b B2Pbp 37"
+)
+
+
+# verify_movesのown_attacked_after_pv/mate_threat_after_pv(§24.2, §24.3)検証用 --
+
+# own_attacked_after_pv: 候補1七1六(1g1f)自体は無関係な静かな手。着手直後は
+# 先手飛5五が白角9一ににらまれている(既にhanging)のみだが、読み筋(白角が
+# 9一から5五へ飛を取りに来る、深さ1で一意に選ばれる)適用後は角が5五からの
+# 斜線で先手桂7七に新たに当たる(着手直後には無かった当たり)。
+OWN_ATTACKED_AFTER_PV_SFEN = "b7k/9/9/9/4R4/9/2N5P/9/4K4 b - 1"
+
+# mate_threat_after_pv: 候補9七9六(9g9f)自体は無関係な静かな手。読み筋
+# (白馬が1六から3八の先手歩を取りつつ、単騎で受けなしの詰めろを組む形に
+# 移動する。深さ1で一意に選ばれる)適用前は詰めろが存在しないが、適用後は
+# 先手が何もしなければ後手の持ち駒金で1手詰め(G*2八)になる。
+MATE_THREAT_AFTER_PV_SFEN = "4k4/9/9/9/9/8+b/P8/6P2/8K b g 1"
+
 
 # --- material ---------------------------------------------------------------
 
@@ -651,6 +691,8 @@ def test_verify_moves_is_mate_candidate_has_no_destination():
     assert "trapped_major_pieces_after" not in entry
     assert "own_trapped_major_pieces_after" not in entry  # (h) §21.4
     assert "own_king_shelter_after" not in entry  # (d) §22.6
+    assert "own_attacked_after_pv" not in entry  # §24.5
+    assert "mate_threat_after_pv" not in entry  # §24.5
 
 
 # --- verify_movesのown_trapped_major_pieces_after(§21.2, §21.4(f)(g)) ----------
@@ -721,6 +763,83 @@ def test_verify_moves_own_king_shelter_after_reflects_king_move_itself():
         b2.pieces, cshogi.BLACK, b2.king_square(cshogi.BLACK)
     )
     assert entry["own_king_shelter_after"]["immediately_after"] == expected
+
+
+# --- verify_movesのown_attacked_after_pv/mate_threat_after_pv(§24.2, §24.3) ---
+
+
+def test_verify_moves_own_attacked_after_pv_detects_new_attack_along_pv():
+    # (e) §24.5: own_attacked_after(着手直後、応手を読む前)には現れない、
+    # 読み筋の途中で自分の駒に新たに生じる当たりがown_attacked_after_pvで
+    # 検出されること。
+    board = cshogi.Board()
+    board.set_sfen(OWN_ATTACKED_AFTER_PV_SFEN)
+    (entry,) = analysis.verify_moves(board, ["1g1f"], depth=1)
+    assert entry["search_depth_completed"] > 0
+    assert "7七" not in [e["square"] for e in entry["own_attacked_after"]]
+    assert "7七" in [e["square"] for e in entry["own_attacked_after_pv"]]
+
+
+def test_verify_moves_own_attacked_after_pv_is_none_on_zero_depth():
+    # (f) search_depth_completed == 0のとき、own_attacked_after_pvがnullで
+    # あること(material_changeがnullになる場合と同じ扱い)。
+    board = cshogi.Board()
+    board.set_sfen(KING_EXPOSED_SFEN)
+    (entry,) = analysis.verify_moves(board, ["5i5h"], node_limit=1)
+    assert entry["search_depth_completed"] == 0
+    assert entry["own_attacked_after_pv"] is None
+
+
+def test_verify_moves_mate_threat_after_pv_detects_new_threat():
+    # (g) §24.5: 読み筋を最後まで適用する前は詰めろが存在しないが、適用後に
+    # 詰めろが生じる局面でmate_threat_after_pvが正しく検出されること。
+    board = cshogi.Board()
+    board.set_sfen(MATE_THREAT_AFTER_PV_SFEN)
+    assert analysis.find_mate_threat(cshogi.Board(MATE_THREAT_AFTER_PV_SFEN), 5) is None
+    (entry,) = analysis.verify_moves(board, ["9g9f"], depth=1, mate_ply=5)
+    assert entry["search_depth_completed"] > 0
+    assert entry["allows_mate"] is None  # 候補手自体は頓死ではないこと
+    threat = entry["mate_threat_after_pv"]
+    assert threat is not None
+    assert threat["found"] is True
+    assert threat["within_ply"] == 1
+
+
+def test_verify_moves_mate_threat_after_pv_none_when_no_threat():
+    # (h) 読み筋終端で詰めろがない場合Noneになること。
+    board = cshogi.Board()
+    board.set_sfen(CAPTURE_ROOK_SFEN)
+    (entry,) = analysis.verify_moves(board, ["5e5c"])
+    assert entry["search_depth_completed"] > 0
+    assert entry["mate_threat_after_pv"] is None
+
+
+def test_verify_moves_mate_threat_after_pv_is_none_on_zero_depth():
+    # (h) search_depth_completed == 0のとき、mate_threat_after_pvがnullである
+    # こと。
+    board = cshogi.Board()
+    board.set_sfen(KING_EXPOSED_SFEN)
+    (entry,) = analysis.verify_moves(board, ["5i5h"], node_limit=1)
+    assert entry["search_depth_completed"] == 0
+    assert entry["mate_threat_after_pv"] is None
+
+
+def test_verify_moves_mate_threat_after_pv_none_when_pv_length_is_even():
+    # 実戦局面(games/2026-07-16_074057.kif 57手目相当)の再現で判明した既知の
+    # 限界: 読み筋の総手数が偶数だと読み筋終端の手番がこの手を指した側
+    # (mover_color)に戻らず相手番のままになる(反復深化の打ち切り・静止探索の
+    # 追加の取り合いで発生しうる)。この場合find_mate_threatを素直に呼ぶと
+    # 逆方向(相手が何もしなければこの手を指した側が詰ませられるか)の判定に
+    # なってしまうため、mate_threat_after_pvはnullを返すこと
+    # (MATE_THREAT_AFTER_PV_SFENは詰めろの土台〈馬+持ち駒金〉自体はdepth=1と
+    # 変わらず残っているが、depth=2では読み筋が2手〈偶数〉になり手番が
+    # 戻らないことを利用する)。
+    board = cshogi.Board()
+    board.set_sfen(MATE_THREAT_AFTER_PV_SFEN)
+    (entry,) = analysis.verify_moves(board, ["9g9f"], depth=2, mate_ply=5)
+    assert entry["search_depth_completed"] > 0
+    assert len(entry["reply_pv_usi"]) % 2 == 0
+    assert entry["mate_threat_after_pv"] is None
 
 
 # --- 反復深化がverify_movesの信頼性判断に反映されること(§14.4) -----------------
@@ -1257,6 +1376,90 @@ def test_trapped_major_pieces_color_skips_initial_pass_when_turn_shifted():
     shifted = cshogi.Board()
     shifted.set_sfen(TRAPPED_BISHOP_SFEN.replace(" b ", " w "))
     assert analysis.trapped_major_pieces(shifted, color=cshogi.BLACK) == expected
+
+
+# --- major_piece_fork_opportunities(§24.1, §24.5(a)(b)(c)(d)) -----------------
+
+
+def test_major_piece_fork_opportunities_detects_drop_fork():
+    # (a) 2026-07-16対局の36手目相当: 打ち込みで相手の飛・金の2駒に同時に当たり、
+    # いずれにも紐が付いていない局面で両取りとして検出されること。
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_DROP_SFEN)
+    result = analysis.major_piece_fork_opportunities(board)
+    entry = next(e for e in result if e["square"] == "5五")
+    assert entry["piece"] == "角"
+    assert entry["source"] == "drop"
+    assert entry["example_move_usi"] == "B*5e"
+    assert {t["square"] for t in entry["targets"]} == {"3三", "7七"}
+
+
+def test_major_piece_fork_opportunities_empty_with_single_target():
+    # (b) 当たる駒が1つのみの場合は両取りとして検出されないこと。
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_SINGLE_TARGET_SFEN)
+    assert analysis.major_piece_fork_opportunities(board) == []
+
+
+def test_major_piece_fork_opportunities_empty_when_both_targets_defended():
+    # (b) 紐が付いている駒しかない場合は検出されないこと。
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_BOTH_DEFENDED_SFEN)
+    assert analysis.major_piece_fork_opportunities(board) == []
+
+
+def test_major_piece_fork_opportunities_board_move_excludes_promotion():
+    # (c) 盤上の角の移動による両取り: 成り込みゾーン内への移動でも、成る手は
+    # 対象外で不成のみが検出されること(major_piece_drop_threatsとの重複回避)。
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_BOARD_MOVE_SFEN)
+    result = analysis.major_piece_fork_opportunities(board)
+    entry = next(e for e in result if e["square"] == "2二")
+    assert entry["piece"] == "角"  # 「馬」ではないこと(不成のみ)
+    assert entry["source"] == "board"
+    assert entry["example_move_usi"] == "9i2b"
+    assert {t["square"] for t in entry["targets"]} == {"1三", "3一"}
+
+
+def test_major_piece_fork_opportunities_excludes_move_that_gives_check():
+    # (c) 王手を伴う手は対象外(allows_mate/check_evasionsとの重複回避)。
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_GIVES_CHECK_SFEN)
+    assert analysis.major_piece_fork_opportunities(board) == []
+
+
+def test_major_piece_fork_opportunities_empty_while_in_check():
+    # (d) 王手中は空リストであること。
+    board = cshogi.Board()
+    board.set_sfen(IN_CHECK_SFEN.replace(" - ", " B "))
+    assert board.is_check()
+    assert analysis.major_piece_fork_opportunities(board) == []
+
+
+def test_major_piece_fork_opportunities_does_not_mutate_board():
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_DROP_SFEN)
+    before = board.sfen()
+    analysis.major_piece_fork_opportunities(board)
+    assert board.sfen() == before
+
+
+def test_analyze_includes_major_piece_fork_opportunities():
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_DROP_SFEN)
+    result = analysis.analyze(board)
+    assert any(e["square"] == "5五" for e in result["major_piece_fork_opportunities"])
+
+
+def test_major_piece_fork_opportunities_real_game_36th_move():
+    # (a) games/2026-07-16_074057.kif 36手目相当の実戦再現スモークテスト。
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_REAL_GAME_SFEN)
+    result = analysis.major_piece_fork_opportunities(board)
+    entry = next(e for e in result if e["example_move_usi"] == "B*9e")
+    assert entry["piece"] == "角"
+    assert entry["source"] == "drop"
+    assert {t["square"] for t in entry["targets"]} == {"7三", "8六"}
 
 
 # --- simulate_line ----------------------------------------------------------
