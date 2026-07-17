@@ -409,6 +409,15 @@ def analyze_position() -> dict:
     既に当たっており無償捕獲できる可能性が高いことを示す)。打ち込み(持ち駒からの
     新規配置)は対象外。静的な利き数のみの判定でピンや取り合いの最終損得は考慮
     しない。王手中は空リスト。
+    major_piece_fork_opportunities(§24.1)は、手番側の持ち駒にある飛・角の打ち込み、
+    または盤上の未成りの飛・角の移動が、単純な両取り(王手も成りも伴わない)になる
+    機会の一覧([{square, piece, source, targets, example_move_usi}, ...])。
+    sourceは打ち込み由来なら"drop"、盤上の駒の移動由来なら"board"。targetsは
+    両取りされる相手の駒(2件以上、玉は含まない)。王手を伴う両取りはallows_mate/
+    check_evasionsの範疇、成り込みを伴う打ち込みはmajor_piece_drop_threatsの
+    範疇であり、本フィールドは両者と重複しない「単純な両取り」のみを対象とする。
+    紐が1つでもあればその駒は対象から外れる(ピン・取り合いの最終損得は考慮
+    しない、§17.1と同じ既知の限界)。王手中は空リスト。
     king_safety(§22.4)は手番側視点の玉の安全度の要約。own_shelter_countは自玉に
     隣接する自分の金・銀(金と同格の成駒を含む)の数、opponent_hand_valueは相手の
     持ち駒の合計価値(既存の駒価値換算)。material(駒割り)だけでは見えない、
@@ -475,6 +484,22 @@ def verify_moves(
     (5)は変更しない。王手中で合法手が少ない局面など、探索コストが低い局面で
     重要な判断の前だけ大きく指定すると、既定より深い強制詰み筋を検出できる
     (node_limitと同じ「既定は変えず、必要な時だけ引き上げる」考え方)。
+    own_attacked_after_pv(§24.2): 読み筋(reply_pv_usi)を最後まで適用した局面
+    に対するattacked_pieces(この手を指す側視点)の上位5件。own_attacked_after
+    (着手直後、応手を読む前)には現れない、読み筋の途中で自分の駒に新たに
+    生じる当たりを検出できる(例: 相手の歩打ち→と金前進が読み筋に含まれる場合)。
+    search_depth_completed == 0の場合はnull(material_changeと同じ扱い)。
+    is_mateの候補には付けない。
+    mate_threat_after_pv(§24.3): 読み筋を最後まで適用した局面に対する詰めろ
+    判定({found, within_ply, first_move_usi}、詰めろなしはnull)。「読み筋の
+    最後で自分が何もしなければ、相手から詰みがあるか」の早期警告。非nullの
+    候補は、材料点変化が良くても優先度を下げ、詰めろを受ける代替候補を優先
+    的に検討すること。reply_pv_usiは材料点+玉の安全度ベースの浅い探索の結果
+    であり、実際の相手の指し手と一致するとは限らない(material_changeと同じ
+    制約)。mate_ply引数をそのまま流用する。search_depth_completed == 0の
+    場合はnull。is_mateの候補には付けない。
+    既知の限界: 読み筋の総手数の偶奇によっては読み筋終端の手番がこの手を
+    指した側に戻っていないことがあり、その場合はnullを返す(見逃しうる)。
     """
     board = _board_snapshot()
     if board is None:
