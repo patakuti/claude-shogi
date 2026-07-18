@@ -1,4 +1,6 @@
 import os
+import threading
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -441,3 +443,35 @@ def test_load_kif_restores_resigned_game(tmp_path):
 
     blocked = server.apply_move("3c3d")
     assert not blocked["ok"]
+
+
+def test_wait_for_user_move_waiting_includes_move_number_and_turn():
+    # (f) §27.3: status:"waiting"応答にmove_number/turnが含まれること
+    # (取りこぼしバグではないかとの疑念を解消するための運用改善)。
+    server.new_game(difficulty=1, user_side="black", mode="csa")
+    result = server.wait_for_user_move(timeout_seconds=1)
+    assert result == {
+        "ok": True, "status": "waiting", "move_number": 1, "turn": "black",
+    }
+
+
+def test_wait_for_user_move_moved_response_unchanged():
+    # (f) 既存のstatus_wait:"moved"応答形式(move_number/turnを含む_state_dict由来の
+    # フィールド一式)が変更されないことの回帰確認。ポーリング開始後に着手を反映する
+    # 実運用(csa_server.pyの別スレッドからの反映)を模した別スレッドで着手する。
+    server.new_game(difficulty=1, user_side="black", mode="csa")
+
+    def apply_after_delay():
+        time.sleep(0.2)
+        server.apply_move("7g7f")
+
+    thread = threading.Thread(target=apply_after_delay)
+    thread.start()
+    try:
+        result = server.wait_for_user_move(timeout_seconds=5)
+    finally:
+        thread.join()
+    assert result["status_wait"] == "moved"
+    assert result["move_number"] == 2
+    assert result["turn"] == "white"
+    assert "attack_report" in result
