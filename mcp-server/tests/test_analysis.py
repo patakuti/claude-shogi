@@ -119,6 +119,38 @@ FORK_OPPORTUNITY_REAL_GAME_SFEN = (
     "l4gsnl/4g1k2/p1n1pp1p1/2p1s1p2/3P4p/1rP1SPP2/P1N1PG1PP/3R2SK1/L4G1NL b B2Pbp 37"
 )
 
+# 銀・金・桂・香の打ち込みによる両取り検出用(§27.1) ---------------------------
+
+# 銀打ち5五が後手歩4四・6四の両方(前方斜めの利き)に当たり、いずれも紐なし。
+FORK_OPPORTUNITY_SILVER_DROP_SFEN = "k8/9/9/3p1p3/9/9/9/9/4K4 b S 1"
+
+# 金打ち5五が後手歩4五・6五の両方(横の利き)に当たり、いずれも紐なし。
+FORK_OPPORTUNITY_GOLD_DROP_SFEN = "k8/9/9/9/3p1p3/9/9/9/4K4 b G 1"
+
+# 桂打ち5五が後手歩4三・6三の両方(桂の跳躍先2マス)に当たり、いずれも紐なし。
+FORK_OPPORTUNITY_KNIGHT_DROP_SFEN = "k8/9/3p1p3/9/9/9/9/9/4K4 b N 1"
+
+# 香打ちは同一筋の走り利きのため手前の1駒にしか当たらず(奥の駒は遮蔽される)、
+# 2駒への両取りは構造的に成立しない(5三・5四に後手歩が並んでいても検出0件)。
+FORK_OPPORTUNITY_LANCE_DROP_NO_FORK_SFEN = "k8/9/4p4/4p4/9/9/9/9/4K4 b L 1"
+
+# 盤上の銀(5六)が5五へ移動すると後手歩4四・6四の両取りになる形だが、
+# 銀の盤上移動は§27.1のスコープ外(打ち込みのみ対象)のため検出されないこと。
+FORK_OPPORTUNITY_SILVER_BOARD_MOVE_EXCLUDED_SFEN = "k8/9/9/3p1p3/9/4S4/9/9/4K4 b - 1"
+
+# king_only_defense拡張(§27.1)の直接検証用: 銀打ち5五が後手金4四(紐なし)・
+# 後手金6四(唯一の紐が後手玉6三)の両方に当たる。6四金は「紐はあるが玉のみ」
+# のため実質紐なし扱いとなり、両取りとして検出されること。
+FORK_OPPORTUNITY_KING_ONLY_DEFENSE_SFEN = "9/9/3k5/3g1g3/9/9/9/9/4K4 b S 1"
+
+# games/2026-07-17_170612.kif 50手目相当(△７八銀打、実戦の敗着)の実戦再現。
+# 6七金の唯一の紐が自玉(king_only_defense)、8七金は紐なし。当初の要件定義・
+# 設計ドラフトは棋譜ファイル名・手数を誤記していたため、実装時にiconvでkifを
+# 直接確認し訂正済み(02_design.md §27冒頭の注記)。
+FORK_OPPORTUNITY_REAL_GAME_SILVER_DROP_SFEN = (
+    "l4gk1l/1r2g1s2/p3ppn1p/2p3p2/1P1P1s3/2P1P4/PGNG1PP1P/4KS1R1/L6NL w BN3Pbsp 50"
+)
+
 
 # verify_movesのown_attacked_after_pv/mate_threat_after_pv(§24.2, §24.3)検証用 --
 
@@ -499,6 +531,21 @@ KING_SAFETY_SHELTER_SFEN = "4k4/9/9/9/9/9/9/4GS3/4K4 b - 1"
 # opponent_hand_value検証用: 手番(先手)から見た相手(後手)の持ち駒が飛1・歩2。
 KING_SAFETY_HAND_VALUE_SFEN = "4k4/9/9/9/9/9/9/9/4K4 b r2p 1"
 
+# mating_net_risk検証用(§27.2): 後手角2五の斜め利きが自玉5九の隣接マス5八を
+# 通過する(遮蔽物なし)。
+KING_SAFETY_MATING_NET_RISK_TRUE_SFEN = "k8/9/9/9/7b1/9/9/9/4K4 b - 1"
+
+# mating_net_risk検証用: 盤上に他の駒が一切なく、自玉の隣接マスに大駒の利きが
+# 及ばない(False)。
+KING_SAFETY_MATING_NET_RISK_FALSE_SFEN = "k8/9/9/9/9/9/9/9/4K4 b - 1"
+
+# games/2026-07-18_074522.kif 87〜88手目相当の実戦再現(Claude Fable 5が後手、
+# 詰みで敗北)。後手玉4一の隣接マス5二に、直前(87手目)に相手の馬(3四)が
+# 移動してきた利きが及んでいる状態。
+KING_SAFETY_MATING_NET_RISK_REAL_GAME_SFEN = (
+    "l4k3/2p2gp+N1/3s2n2/4pp+B2/p2p4p/9/+r2GPPPP1/4S1SK1/5G1NL w GLPrbsnl6p 88"
+)
+
 
 def test_analyze_king_safety_own_shelter_count():
     # (h) 玉の隣接マスに金銀(成駒含む)を配置した局面で正しい数を返すこと。
@@ -518,11 +565,43 @@ def test_analyze_king_safety_opponent_hand_value():
 
 def test_analyze_king_safety_present_while_in_check():
     # (j) 王手中でもmajor_piece_drop_threats等と異なり空にならず、通常どおり計算される。
+    # IN_CHECK_SFENは後手飛5三の縦利きが自玉5九への経路上の5八(隣接マス)も
+    # 通過するため、mating_net_riskもTrueになる(§27.2、王手中でも例外なく計算)。
     board = cshogi.Board()
     board.set_sfen(IN_CHECK_SFEN)
     result = analysis.analyze(board)
     assert result["in_check"]
-    assert result["king_safety"] == {"own_shelter_count": 0, "opponent_hand_value": 0}
+    assert result["king_safety"] == {
+        "own_shelter_count": 0, "opponent_hand_value": 0, "mating_net_risk": True,
+    }
+
+
+# --- king_safety.mating_net_risk(§27.2、§27.5(d)(e)) --------------------------
+
+
+def test_analyze_king_safety_mating_net_risk_true():
+    # (d) 相手の角(成りを含む)の利き筋が自玉の隣接マスに及んでいる局面でTrue。
+    board = cshogi.Board()
+    board.set_sfen(KING_SAFETY_MATING_NET_RISK_TRUE_SFEN)
+    result = analysis.analyze(board)
+    assert result["king_safety"]["mating_net_risk"] is True
+
+
+def test_analyze_king_safety_mating_net_risk_false():
+    # (d) 大駒の利きが自玉に及んでいない局面でFalse。
+    board = cshogi.Board()
+    board.set_sfen(KING_SAFETY_MATING_NET_RISK_FALSE_SFEN)
+    result = analysis.analyze(board)
+    assert result["king_safety"]["mating_net_risk"] is False
+
+
+def test_analyze_king_safety_mating_net_risk_real_game_87th_move():
+    # (d) games/2026-07-18_074522.kif 87〜88手目相当の実戦再現スモークテスト。
+    # 相手の馬(3四)の利きが後手玉(4一)の隣接マス5二に及んでいること。
+    board = cshogi.Board()
+    board.set_sfen(KING_SAFETY_MATING_NET_RISK_REAL_GAME_SFEN)
+    result = analysis.analyze(board)
+    assert result["king_safety"]["mating_net_risk"] is True
 
 
 # --- 玉の安全度(king safety) -------------------------------------------------
@@ -1533,6 +1612,80 @@ def test_major_piece_fork_opportunities_include_checks_false_still_needs_two_tar
     board = cshogi.Board()
     board.set_sfen(FORK_OPPORTUNITY_SINGLE_TARGET_SFEN)
     assert analysis.major_piece_fork_opportunities(board, include_checks=True) == []
+
+
+# --- major_piece_fork_opportunities: 銀・金・桂・香の打ち込み(§27.1・§27.5(a)(b)(c)) ---
+
+
+def test_major_piece_fork_opportunities_detects_silver_drop_fork():
+    # (a) 銀打ちによる両取りが検出されること。
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_SILVER_DROP_SFEN)
+    result = analysis.major_piece_fork_opportunities(board)
+    entry = next(e for e in result if e["example_move_usi"] == "S*5e")
+    assert entry["piece"] == "銀"
+    assert entry["source"] == "drop"
+    assert {t["square"] for t in entry["targets"]} == {"4四", "6四"}
+
+
+def test_major_piece_fork_opportunities_detects_gold_drop_fork():
+    # (a) 金打ちによる両取りが検出されること。
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_GOLD_DROP_SFEN)
+    result = analysis.major_piece_fork_opportunities(board)
+    entry = next(e for e in result if e["example_move_usi"] == "G*5e")
+    assert entry["piece"] == "金"
+    assert entry["source"] == "drop"
+    assert {t["square"] for t in entry["targets"]} == {"4五", "6五"}
+
+
+def test_major_piece_fork_opportunities_detects_knight_drop_fork():
+    # (a) 桂打ちによる両取りが検出されること。
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_KNIGHT_DROP_SFEN)
+    result = analysis.major_piece_fork_opportunities(board)
+    entry = next(e for e in result if e["example_move_usi"] == "N*5e")
+    assert entry["piece"] == "桂"
+    assert entry["source"] == "drop"
+    assert {t["square"] for t in entry["targets"]} == {"4三", "6三"}
+
+
+def test_major_piece_fork_opportunities_lance_drop_cannot_fork_same_file():
+    # (a) 香打ちは同一筋の走り利きのため手前の1駒しか当たらず、2駒両取りは
+    # 構造的に成立しないこと(既知の限界、§27.1)。
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_LANCE_DROP_NO_FORK_SFEN)
+    assert analysis.major_piece_fork_opportunities(board) == []
+
+
+def test_major_piece_fork_opportunities_excludes_silver_board_move():
+    # (b) 銀・金・桂・香の盤上の移動による両取りはスコープ外で検出されないこと
+    # (§27.1の意図的なスコープ限定の回帰確認)。
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_SILVER_BOARD_MOVE_EXCLUDED_SFEN)
+    assert analysis.major_piece_fork_opportunities(board) == []
+
+
+def test_major_piece_fork_opportunities_king_only_defense_still_counts_as_target():
+    # king_only_defense拡張(§27.1、_fork_targets)の直接検証: 紐が自玉のみの
+    # 駒も実質紐なしとして両取り対象に含まれること。
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_KING_ONLY_DEFENSE_SFEN)
+    result = analysis.major_piece_fork_opportunities(board)
+    entry = next(e for e in result if e["example_move_usi"] == "S*5e")
+    assert {t["square"] for t in entry["targets"]} == {"4四", "6四"}
+
+
+def test_major_piece_fork_opportunities_real_game_170612_50th_move():
+    # (a) games/2026-07-17_170612.kif 50手目相当の実戦再現スモークテスト。
+    # △７八銀打が6七金(king_only_defense)・8七金(紐なし)の両取りになる。
+    board = cshogi.Board()
+    board.set_sfen(FORK_OPPORTUNITY_REAL_GAME_SILVER_DROP_SFEN)
+    result = analysis.major_piece_fork_opportunities(board)
+    entry = next(e for e in result if e["example_move_usi"] == "S*7h")
+    assert entry["piece"] == "銀"
+    assert entry["source"] == "drop"
+    assert {t["square"] for t in entry["targets"]} == {"6七", "8七"}
 
 
 # --- major_piece_attacked_squares(§25.3) -------------------------------------

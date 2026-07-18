@@ -344,9 +344,15 @@ def attacked_pieces(board: cshogi.Board, color: Optional[int] = None) -> list[di
 
 
 def _fork_targets(pieces_now: list[int], attacker_color: int, defender_color: int, dest: int) -> list[dict]:
-    """destに今動いた駒(attacker_color)自身の利きが新たに当たっている、かつ紐
-    (defender_color自身の利き)が付いていないdefender_colorの駒(玉を除く)一覧。
+    """destに今動いた駒(attacker_color)自身の利きが新たに当たっている、かつ玉以外の
+    紐(defender_color自身の利き)が付いていないdefender_colorの駒(玉を除く)一覧。
     §17.1の_classify_followupと同じ「動かした駒自身の利き」判定をdest基準で行う。
+
+    紐が玉のみ(king_only_defense、§19.1と同じ考え方)の場合は「実質的に紐なし」
+    として対象に含める(§27.1)。玉による防御は取り返すと玉自身が危険な位置に
+    出る特殊なケースであり、他の駒による紐と同列に安全とは見なせないため。
+    games/2026-07-17_170612.kif 50手目△７八銀打(6七金・8七金の両取り、
+    6七金の唯一の紐が自玉)が実例。
     """
     defender_is_white = defender_color == cshogi.WHITE
     targets = []
@@ -358,22 +364,33 @@ def _fork_targets(pieces_now: list[int], attacker_color: int, defender_color: in
             continue
         if dest not in attackers(pieces_now, attacker_color, tsq):
             continue  # 今動いた駒自身の利きでなければ対象外
-        if attackers(pieces_now, defender_color, tsq):
-            continue  # 紐が付いていれば対象外
+        defenders = attackers(pieces_now, defender_color, tsq)
+        has_real_defender = any(pieces_now[d] % _WHITE_OFFSET != cshogi.KING for d in defenders)
+        if has_real_defender:
+            continue  # 玉以外の紐が付いていれば対象外
         targets.append({"square": square_name(tsq), "piece": PIECE_NAMES[piece_type]})
     return targets
+
+
+_FORK_DROP_ONLY_PIECES = (cshogi.SILVER, cshogi.GOLD, cshogi.KNIGHT, cshogi.LANCE)
 
 
 def major_piece_fork_opportunities(
     board: cshogi.Board, color: Optional[int] = None, include_checks: bool = False
 ) -> list[dict]:
-    """colorの持ち駒にある飛・角の打ち込み、または盤上の未成りの飛・角の移動が、
-    両取りになる機会の一覧(§24.1、include_checksは§25.1)。boardは攻撃側の局面。
-    盤面は変更しない。
+    """colorの持ち駒にある飛・角の打ち込み、盤上の未成りの飛・角の移動、または
+    colorの持ち駒にある銀・金・桂・香の打ち込みが、両取りになる機会の一覧
+    (§24.1、include_checksは§25.1、銀・金・桂・香の打ち込みは§27.1)。
+    boardは攻撃側の局面。盤面は変更しない。
 
     colorは攻撃側(省略時はboard.turn)。成りを伴う手は対象外(成り込みを伴う
     打ち込みはmajor_piece_drop_threatsの範疇であり、本関数はそれと重複しない
     両取りのみを対象とする)。
+
+    銀・金・桂・香は**持ち駒からの打ち込みのみ**を対象とし、盤上の移動は
+    対象外(§27.1)。飛・角と異なり長い走り利きを持たず、盤上の移動まで
+    含めると既存のmajor_piece_drop_threats/own_attacked_afterと役割が
+    重複するため、意図的にスコープを打ち込みのみに絞っている。
 
     include_checks(既定False)がFalseのとき、王手を伴う手も対象外(王手を伴う
     両取りはallows_mate/check_evasionsの範疇として除外する、§24.1)。Trueのとき
@@ -406,7 +423,8 @@ def major_piece_fork_opportunities(
             m for m in copy.legal_moves
             if not cshogi.move_is_promotion(m)
             and (
-                cshogi.move_drop_hand_piece(m) in (cshogi.ROOK, cshogi.BISHOP)
+                cshogi.hand_piece_to_piece_type(cshogi.move_drop_hand_piece(m))
+                in (cshogi.ROOK, cshogi.BISHOP) + _FORK_DROP_ONLY_PIECES
                 if cshogi.move_is_drop(m)
                 else cshogi.move_from_piece_type(m) in (cshogi.ROOK, cshogi.BISHOP)
             )
@@ -425,7 +443,11 @@ def major_piece_fork_opportunities(
             if len(targets) < min_targets:
                 continue
             is_drop = cshogi.move_is_drop(m)
-            piece_type = cshogi.move_drop_hand_piece(m) if is_drop else cshogi.move_from_piece_type(m)
+            piece_type = (
+                cshogi.hand_piece_to_piece_type(cshogi.move_drop_hand_piece(m))
+                if is_drop
+                else cshogi.move_from_piece_type(m)
+            )
             results.append({
                 "square": square_name(cshogi.move_to(m)),
                 "piece": PIECE_NAMES[piece_type],
@@ -659,9 +681,13 @@ def analyze(board: cshogi.Board, mate_ply: int = 7, threat_ply: int = DEFAULT_MA
 
     own_color = copy.turn
     opp_hand = hand_white if own_color == cshogi.BLACK else hand_black
+    own_attacked_squares = major_piece_attacked_squares(copy, color=own_color)
+    king_zone_names = {square_name(z) for z in _KING_ZONES[copy.king_square(own_color)]}
+    mating_net_risk = any(e["square"] in king_zone_names for e in own_attacked_squares)
     king_safety = {
         "own_shelter_count": _king_shelter_count(copy.pieces, own_color, copy.king_square(own_color)),
         "opponent_hand_value": sum(n * v for n, v in zip(opp_hand, HAND_PIECE_VALUES)),
+        "mating_net_risk": mating_net_risk,
     }
 
     return {
@@ -675,7 +701,7 @@ def analyze(board: cshogi.Board, mate_ply: int = 7, threat_ply: int = DEFAULT_MA
         "major_piece_drop_threats": major_piece_drop_threats(copy),
         "trapped_major_pieces": trapped_major_pieces(copy),
         "major_piece_fork_opportunities": major_piece_fork_opportunities(copy),
-        "major_piece_attacked_squares": major_piece_attacked_squares(copy),
+        "major_piece_attacked_squares": own_attacked_squares,
         "king_safety": king_safety,
     }
 

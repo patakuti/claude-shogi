@@ -359,8 +359,12 @@ def wait_for_user_move(timeout_seconds: int = 8) -> dict:
     csa_server.pyが人間側の指し手を反映するまで、対局の手数を短い間隔でポーリングする。
     timeout_seconds(既定8秒、上限30秒にクランプ)以内に着手があれば、apply_moveと
     同形式の最新状態(attack_report込み)を返す。無ければ`{"ok": true, "status":
-    "waiting"}`を返す(長時間ブロックする設計は避け、呼び出し側がstatus:"waiting"で
-    ある限り繰り返し呼ぶループを回す想定。02_design.md §26.4)。
+    "waiting", "move_number": ..., "turn": ...}`を返す(長時間ブロックする設計は
+    避け、呼び出し側がstatus:"waiting"である限り繰り返し呼ぶループを回す想定。
+    02_design.md §26.4)。move_number/turnはstatus:"waiting"が連続した場合に、
+    手数が変化していなければ「まだ人間が指していないだけ」と判断できるようにする
+    ための追加情報(§27.3。取りこぼしバグではないかとの疑念を解消する運用改善で、
+    ロジック自体の変更ではない)。
     対局が終了(投了・詰み等)していた場合は`status: "game_over"`を含む最新状態を返す。
     mode != "csa"のときはエラーを返す。
     """
@@ -390,7 +394,13 @@ def wait_for_user_move(timeout_seconds: int = 8) -> dict:
                 state["status_wait"] = "moved"
                 return state
         time.sleep(0.5)
-    return {"ok": True, "status": "waiting"}
+    with _session_lock:
+        return {
+            "ok": True,
+            "status": "waiting",
+            "move_number": session.game.move_number(),
+            "turn": session.game.turn(),
+        }
 
 
 @mcp.tool()
@@ -528,21 +538,33 @@ def analyze_position() -> dict:
     既に当たっており無償捕獲できる可能性が高いことを示す)。打ち込み(持ち駒からの
     新規配置)は対象外。静的な利き数のみの判定でピンや取り合いの最終損得は考慮
     しない。王手中は空リスト。
-    major_piece_fork_opportunities(§24.1)は、手番側の持ち駒にある飛・角の打ち込み、
-    または盤上の未成りの飛・角の移動が、単純な両取り(王手も成りも伴わない)になる
-    機会の一覧([{square, piece, source, targets, example_move_usi}, ...])。
-    sourceは打ち込み由来なら"drop"、盤上の駒の移動由来なら"board"。targetsは
+    major_piece_fork_opportunities(§24.1、銀・金・桂・香の打ち込みは§27.1)は、
+    手番側の持ち駒にある飛・角の打ち込み、盤上の未成りの飛・角の移動、または
+    手番側の持ち駒にある銀・金・桂・香の打ち込みが、単純な両取り(王手も成りも
+    伴わない)になる機会の一覧([{square, piece, source, targets,
+    example_move_usi}, ...])。銀・金・桂・香は**持ち駒からの打ち込みのみ**が
+    対象(盤上の移動は対象外、既存のmajor_piece_drop_threats/own_attacked_after
+    との重複を避けるため意図的なスコープ限定)。sourceは打ち込み由来なら"drop"、
+    盤上の駒の移動由来なら"board"(銀・金・桂・香は常に"drop")。targetsは
     両取りされる相手の駒(2件以上、玉は含まない)。王手を伴う両取りはallows_mate/
     check_evasionsの範疇、成り込みを伴う打ち込みはmajor_piece_drop_threatsの
     範疇であり、本フィールドは両者と重複しない「単純な両取り」のみを対象とする。
-    紐が1つでもあればその駒は対象から外れる(ピン・取り合いの最終損得は考慮
-    しない、§17.1と同じ既知の限界)。王手中は空リスト。
-    king_safety(§22.4)は手番側視点の玉の安全度の要約。own_shelter_countは自玉に
-    隣接する自分の金・銀(金と同格の成駒を含む)の数、opponent_hand_valueは相手の
-    持ち駒の合計価値(既存の駒価値換算)。material(駒割り)だけでは見えない、
-    「駒得していても玉が薄く、相手の攻撃力が蓄積している」状態を数値で確認できる
-    (王手中でも他のフィールドと異なり空にならず、通常どおり計算される)。判断の
-    重み付け自体は呼び出し側に委ねる。
+    玉以外の紐が1つでもあればその駒は対象から外れる(ピン・取り合いの最終損得は
+    考慮しない、§17.1と同じ既知の限界)。紐の内訳が自玉のみ(king_only_defense、
+    §19.1と同じ考え方)の場合は実質的に紐なし扱いとして対象に含める(§27.1)。
+    王手中は空リスト。
+    king_safety(§22.4、mating_net_riskは§27.2)は手番側視点の玉の安全度の要約。
+    own_shelter_countは自玉に隣接する自分の金・銀(金と同格の成駒を含む)の数、
+    opponent_hand_valueは相手の持ち駒の合計価値(既存の駒価値換算)。
+    mating_net_riskは、相手の飛・角(成りを含む)の利き筋(major_piece_attacked_
+    squaresと同じ判定)が自玉の隣接マスに及んでいるかを示す真偽値。新規の探索・
+    判定ロジックは追加せず、既存2機能の組み合わせのみで判定する。静的な利き筋の
+    交差判定のみであり、実際に詰み網が完成しているか(合駒・玉の逃げ場の有無)
+    までは判定しない早期警告であり、trueのときは`verify_moves`の`mate_ply`を
+    既定より大きく指定して再検証することが望ましい。material(駒割り)だけでは
+    見えない、「駒得していても玉が薄く、相手の攻撃力が蓄積している」状態を数値で
+    確認できる(王手中でも他のフィールドと異なり空にならず、通常どおり計算される)。
+    判断の重み付け自体は呼び出し側に委ねる。
     major_piece_attacked_squares(§25.3)は、手番側から見て相手の飛・角(成りを
     含む: 龍・馬)が現在利いている升目の一覧([{square, piece, attacker_square},
     ...])。走り利きのみが対象で、龍・馬の隣接8方向への追加の1マス利きは含まない。
