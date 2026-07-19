@@ -763,6 +763,22 @@ def verify_moves(
     (着手直後、応手を読む前)には現れない、読み筋の途中で自分の駒に新たに
     生じる当たりを検出できる。search_depth_completed == 0の場合はnull
     (material_changeがnullになる場合と同じ扱い)。is_mateの候補には付けない。
+    own_trapped_major_pieces_after_pv(§28.1)は、読み筋(reply_pv_usi)を
+    最後まで適用した局面に対するtrapped_major_pieces(own_trapped_major_
+    pieces_afterと同じ攻守の向き: 攻撃側=相手、防御側=自分)。空でなければ、
+    読み筋の最後で自分の飛・角(成りを含む)が捕獲確定(トラップ)になって
+    いることを示す(合駒の後に玉が接近して退路を失う、等)。
+    own_trapped_major_pieces_after(着手直後、応手を読む前)には現れない、
+    読み筋の途中で生じるトラップを検出できる。trapped_major_piecesの
+    color引数によるpush_passの自動切り替え(§20.1)により、読み筋の総手数の
+    偶奇(PV終端の手番)に関わらず呼び出せる(mate_threat_after_pvのような
+    手番パリティの分岐は不要)。既知の限界: trapped_major_piecesは
+    board.is_check()の局面では空リストを返す設計(§18.1)のため、PV終端が
+    王手のまま途切れている場合はトラップを見逃すことがある
+    (own_trapped_major_pieces_after/trapped_major_pieces_afterと同じ制約)。
+    reply_pv_usiが材料点+玉の安全度ベースの浅い探索の結果であり実際の相手の
+    指し手と一致するとは限らない点もmaterial_changeと同じ制約。
+    search_depth_completed == 0の場合はnull。is_mateの候補には付けない。
     mate_threat_after_pv(§24.3)は、読み筋を最後まで適用した局面に対する
     find_mate_threat(mate_ply)の結果({found, within_ply, first_move_usi}、
     詰めろなしはnull)。「読み筋の最後で自分が何もしなければ、相手から
@@ -863,6 +879,7 @@ def verify_moves(
             entry["major_piece_trade"] = _captures_major_piece([move])
             entry["own_attacked_after_pv"] = None
             entry["mate_threat_after_pv"] = None
+            entry["own_trapped_major_pieces_after_pv"] = None
         else:
             # PVを適用した局面の実材料点差からmaterial_changeを算出(§13.5)
             for m in pv:
@@ -879,6 +896,11 @@ def verify_moves(
             )
             # §24.2: 読み筋終端(手番はこの手を指した側=mover_colorに戻っている)の自駒への当たり。
             entry["own_attacked_after_pv"] = attacked_pieces(copy, color=mover_color)[:5]
+            # §28.1: 読み筋終端で自分の飛・角(own_trapped_major_pieces_afterと同じ攻守の向き)が
+            # 捕獲確定(トラップ)になっていないか。trapped_major_piecesのcolor引数による
+            # push_passの自動切り替え(§20.1)により、読み筋の総手数の偶奇(PV終端の手番)に
+            # 関わらず呼び出せる。
+            entry["own_trapped_major_pieces_after_pv"] = trapped_major_pieces(copy, color=opponent_color)
             # §24.3: 読み筋終端で、この手を指した側が何もしなければ相手から詰みがあるか。
             # find_mate_threatはboard.turn側が「何もしなければ」を仮定するため、
             # 読み筋終端でcopy.turn == mover_colorのとき(読み筋の総手数が奇数、

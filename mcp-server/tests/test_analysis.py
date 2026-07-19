@@ -166,6 +166,15 @@ OWN_ATTACKED_AFTER_PV_SFEN = "b7k/9/9/9/4R4/9/2N5P/9/4K4 b - 1"
 # 先手が何もしなければ後手の持ち駒金で1手詰め(G*2八)になる。
 MATE_THREAT_AFTER_PV_SFEN = "4k4/9/9/9/9/8+b/P8/6P2/8K b g 1"
 
+# own_trapped_major_pieces_after_pv(§28.1)検証用 --------------------------------
+# 候補1七1六(1g1f)自体は無関係な静かな手。着手直後、先手角(4四)の唯一の
+# 合法な移動先(5五、他の3方向・6六方向より先は自駒の銀・歩で塞いである)は
+# まだ後手飛(5八)の利きが5七の歩に遮られていて安全(=own_trapped_major_
+# pieces_afterは空)。読み筋(深さ1で一意に選ばれる後手の応手5八5七成、
+# 歩を取りつつ成る。5六が空いているため昇格後の龍が5五に直接利く)適用後は
+# 5五が龍の利きに入り、角の唯一の逃げ場が塞がれて捕獲確定になる。
+OWN_TRAPPED_AFTER_PV_SFEN = "8k/9/4S1S2/5B3/6S2/3P5/4P3P/3grg3/K3s4 b - 1"
+
 
 # --- material ---------------------------------------------------------------
 
@@ -771,6 +780,7 @@ def test_verify_moves_is_mate_candidate_has_no_destination():
     assert "own_trapped_major_pieces_after" not in entry  # (h) §21.4
     assert "own_king_shelter_after" not in entry  # (d) §22.6
     assert "own_attacked_after_pv" not in entry  # §24.5
+    assert "own_trapped_major_pieces_after_pv" not in entry  # (d) §28.3
     assert "mate_threat_after_pv" not in entry  # §24.5
     assert "opponent_fork_threats_after" not in entry  # (d) §25.5
 
@@ -971,6 +981,61 @@ def test_verify_moves_mate_threat_after_pv_none_when_pv_length_is_even():
     assert entry["search_depth_completed"] > 0
     assert len(entry["reply_pv_usi"]) % 2 == 0
     assert entry["mate_threat_after_pv"] is None
+
+
+# --- verify_movesのown_trapped_major_pieces_after_pv(§28.1, §28.3) -------------
+
+
+def test_verify_moves_own_trapped_major_pieces_after_pv_detects_new_trap():
+    # (a) games/2026-07-18_161433.kif 58手目相当の見落とし(合駒の後に玉が
+    # 接近して飛・角が退路を失う)を再構成した局面。着手直後(応手を読む前)は
+    # 角の唯一の逃げ場(5五)がまだ安全だが、読み筋(後手飛5八5七成)を最後まで
+    # 適用すると、その逃げ場が新たな龍の利きに入り捕獲確定になる。
+    board = cshogi.Board()
+    board.set_sfen(OWN_TRAPPED_AFTER_PV_SFEN)
+    (entry,) = analysis.verify_moves(board, ["1g1f"], depth=1)
+    assert entry["search_depth_completed"] > 0
+    assert entry["own_trapped_major_pieces_after"] == []  # 着手直後はまだ安全
+    trapped = next(
+        (e for e in entry["own_trapped_major_pieces_after_pv"] if e["square"] == "4四"), None
+    )
+    assert trapped is not None
+    assert trapped["piece"] == "角"
+
+
+def test_verify_moves_own_trapped_major_pieces_after_pv_empty_on_safe_candidate():
+    # (b) 読み筋終端でもトラップが生じない通常局面では空リストであること
+    # (own_attacked_after_pvの回帰確認用局面を流用)。
+    board = cshogi.Board()
+    board.set_sfen(OWN_ATTACKED_AFTER_PV_SFEN)
+    (entry,) = analysis.verify_moves(board, ["1g1f"], depth=1)
+    assert entry["search_depth_completed"] > 0
+    assert entry["own_trapped_major_pieces_after_pv"] == []
+
+
+def test_verify_moves_own_trapped_major_pieces_after_pv_is_none_on_zero_depth():
+    # (c) search_depth_completed == 0のとき、他の_after_pv系フィールドと同じく
+    # nullであること。
+    board = cshogi.Board()
+    board.set_sfen(KING_EXPOSED_SFEN)
+    (entry,) = analysis.verify_moves(board, ["5i5h"], node_limit=1)
+    assert entry["search_depth_completed"] == 0
+    assert entry["own_trapped_major_pieces_after_pv"] is None
+
+
+def test_verify_moves_own_trapped_major_pieces_after_pv_computed_regardless_of_pv_parity():
+    # (e) §28.1: trapped_major_piecesのcolor引数によるpush_passの自動切り替え
+    # (§20.1)により、読み筋の総手数の偶奇(PV終端の手番)に関わらず計算される
+    # こと。mate_threat_after_pv(手番パリティにより偶数手数でnullになる、
+    # 上のtest_..._pv_length_is_even)と対比し、同じ局面・同じ偶数手数のPVでも
+    # own_trapped_major_pieces_after_pvはnullにならない(空リストであっても
+    # 計算はされる)ことを確認する。
+    board = cshogi.Board()
+    board.set_sfen(MATE_THREAT_AFTER_PV_SFEN)
+    (entry,) = analysis.verify_moves(board, ["9g9f"], depth=2, mate_ply=5)
+    assert len(entry["reply_pv_usi"]) % 2 == 0
+    assert entry["mate_threat_after_pv"] is None
+    assert entry["own_trapped_major_pieces_after_pv"] == []
 
 
 # --- 反復深化がverify_movesの信頼性判断に反映されること(§14.4) -----------------

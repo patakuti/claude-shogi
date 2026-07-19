@@ -185,6 +185,22 @@ example_move_usi}, ...]。`targets`は両取りされる相手の駒〈2件以�
 詰み網が完成しているか(合駒・玉の逃げ場の有無)までは判定しない早期警告
 であり、`true`のときは王手中でなくても`verify_moves`の`mate_ply`を既定より
 大きく指定して再検証することが望ましい(§27.2)。
+`verify_moves`の各候補には`own_trapped_major_pieces_after_pv`(読み筋
+`reply_pv_usi`を最後まで適用した局面に対する`trapped_major_pieces`。
+`own_trapped_major_pieces_after`〈着手直後〉と同じ攻守の向き)も含む。
+非空ならば読み筋の最後で自分の飛・角(成りを含む)が捕獲確定(トラップ)に
+なっていることを示す(例: 相手の合駒で退路が塞がれた後、相手玉が接近して
+逃げ場を失う)。`own_trapped_major_pieces_after`(着手直後、応手を読む前)には
+現れない、読み筋の途中で生じるトラップを検出できる。新規の判定アルゴリズムは
+追加せず、`trapped_major_pieces`をPV終端の局面でもう一度呼ぶのみ。
+`trapped_major_pieces`の`color`引数によるpush_passの自動切り替え(§20.1)
+により、読み筋の総手数の偶奇(PV終端の手番)に関わらず計算される
+(`mate_threat_after_pv`のような手番パリティによる`null`化は不要)。既知の
+限界: `trapped_major_pieces`は王手中の局面では空リストを返す設計のため、
+PV終端が王手のまま途切れている場合はトラップを見逃すことがある
+(`own_trapped_major_pieces_after`と同じ制約)。`search_depth_completed == 0`の
+ときは`null`(`material_change`と同じ制約)。`is_mate`の候補には付けない
+(§28.1)。
 `new_game`は`model_name`引数(既定は空文字)を受け付ける。手の決定主体が
 Claude自身のモード(自動/対話/Claude思考)でのみ、対局者名にモデル名を
 合成する(例: `model_name="Sonnet 5"` かつ思考モード →
