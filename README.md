@@ -234,13 +234,10 @@ uv run pytest tests/ -v
 ## 使い方
 
 Claude Code上で以下のスラッシュコマンドを使う。難易度(1〜5)と手番(black/white)は
-引数で指定できる(例: `/shogi-auto 3 black`)。省略した場合は対局開始前に確認される。
+引数で指定できる(例: `/shogi-brain 3 black`)。省略した場合は対局開始前に確認される。
 
 | コマンド | モード |
 |---|---|
-| `/shogi-auto [difficulty] [user_side]` | 自動モード。Claudeが会話を挟まずユーザー側の手も自動で決めて指す。終局や山場のみ報告。 |
-| `/shogi-discuss [difficulty] [user_side]` | Claude対話モード。1手ごとに「こう指そうと思う、理由は〜」と提案してから指す。 |
-| `/shogi-user [difficulty] [user_side]` | ユーザー対話モード。「7六歩」のような自然言語の指示を指し手に変換して指す。 |
 | `/shogi-brain [difficulty] [user_side]` | Claude思考モード。エンジンのヒントを使わず、Claude自身が解析ツール(詰み探索・候補手検証・読み筋シミュレータ)を頼りに考えて指す。 |
 | `/shogi-csa [user_side]` | CSA対局モード。ユーザー側の手はユーザー本人が手元のCSA対応対局ソフトから実際に指し、対局相手側はClaudeが思考モードで指す(USIエンジン不使用)。 |
 | `/shogi-resume [KIFパス]` | 保存済みの対局を再開する。パス省略時は`games/`内の最新KIFを使う。 |
