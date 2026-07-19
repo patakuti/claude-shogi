@@ -163,6 +163,12 @@ argument-hint: [difficulty 1-5] [user_side black|white]
      `own_attacked_after`(着手直後、応手を読む前)には現れない、読み筋の
      途中で自分の駒に新たに生じる当たり(相手の歩打ち→と金前進のような
      手順)を示す。
+     `own_trapped_major_pieces_after_pv`が非空の候補は、`own_trapped_major_
+     pieces_after`(着手直後)と同様に原則避ける。読み筋(`reply_pv_usi`)の
+     途中で自分の飛・角が退路を失う(合駒の後に相手玉が接近する、等)展開を
+     示す、`own_attacked_after_pv`と同じ「読み筋終端まで見る」枠組みの
+     トラップ版。着手直後には現れない見落としを拾うためのフィールドであり、
+     `own_trapped_major_pieces_after`が空だからといって安心しないこと。
      `mate_threat_after_pv`が非`null`の候補は、`material_change`が良くても
      優先度を下げ、詰めろを受ける代替候補を優先的に検討する。読み筋の最後で
      自分が何もしなければ相手から詰みがあることを示す早期警告であり、

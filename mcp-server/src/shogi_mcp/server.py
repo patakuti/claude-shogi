@@ -640,6 +640,17 @@ def verify_moves(
     生じる当たりを検出できる(例: 相手の歩打ち→と金前進が読み筋に含まれる場合)。
     search_depth_completed == 0の場合はnull(material_changeと同じ扱い)。
     is_mateの候補には付けない。
+    own_trapped_major_pieces_after_pv(§28.1): 読み筋(reply_pv_usi)を最後まで
+    適用した局面に対するtrapped_major_pieces(own_trapped_major_pieces_after
+    と同じ攻守の向き)。空でなければ、読み筋の最後で自分の飛・角(成りを含む)
+    が捕獲確定(トラップ)になっていることを示す(例: 合駒で退路が塞がれた後、
+    相手玉が接近して逃げ場を失う場合)。own_trapped_major_pieces_after
+    (着手直後、応手を読む前)には現れない、読み筋の途中で生じるトラップを
+    検出できる。既知の限界: trapped_major_piecesは王手中の局面では空リストを
+    返す設計のため、PV終端が王手のまま途切れている場合はトラップを見逃す
+    ことがある(own_trapped_major_pieces_afterと同じ制約)。reply_pv_usiが
+    浅い探索の結果である点もmaterial_changeと同じ制約。
+    search_depth_completed == 0の場合はnull。is_mateの候補には付けない。
     mate_threat_after_pv(§24.3): 読み筋を最後まで適用した局面に対する詰めろ
     判定({found, within_ply, first_move_usi}、詰めろなしはnull)。「読み筋の
     最後で自分が何もしなければ、相手から詰みがあるか」の早期警告。非nullの
