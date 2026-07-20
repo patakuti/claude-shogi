@@ -42,7 +42,6 @@ LLMに渡し、LLMはそれを読み上げたり解説したりする設計に�
 | [chessagine-mcp](https://github.com/jalpp/chessagine-mcp) | Stockfish/Leela/Maia等複数エンジン+定跡DB+Lichess連携で評価値・最善手を横断的に提供 |
 | [games-dash](https://github.com/sandraschi/games-dash) | 100以上のゲーム+7エンジン(将棋はやねうら王)をMCP経由で統合するプラットフォーム |
 | [将棋エンジンを作る〜(Zennスクラップ)](https://zenn.dev/sh11235/scraps/3456d57f674c73) | Claude Codeに将棋の対戦AIロジック自体を書かせた記録。専用エンジンによる補強なしでは「違和感のある手」を指し、既存の無料将棋サイトのAIにも及ばなかったとの結果 |
-| [AIがあなたの将棋コーチになる時代(note)](https://note.com/hip_rabbit9861/n/n8554c67ae99a) | 駒をクリックして対局できる盤面つきのHTML/Artifactツール。解説生成ボタンでClaudeが局面を解説する仕組み |
 
 本ツールはこれらとは逆の方針を取る。`analyze_position`/`verify_moves`/`simulate_line`はいずれも
 将棋エンジンを使わない自前実装で、返すのは詰み筋・危険手・材料損得といった「検証」情報のみ。
