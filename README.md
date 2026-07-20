@@ -38,17 +38,23 @@ LLMに渡し、LLMはそれを読み上げたり解説したりする設計に�
 | [shogi-mcp](https://github.com/azumausu/shogi-mcp) ([Glama](https://glama.ai/mcp/servers/@azumausu/shogi-mcp)) | USI将棋エンジンの解析結果(MultiPV)をLLMに橋渡しするブリッジ |
 | [ClaudeCodeと将棋を指してみる(Qiita)](https://qiita.com/synchr0niciteen/items/2e2d4ff33ea9df5e35f9) | やねうら王+水匠の評価値・最善手・読み筋を自然言語で取得しながら対局する試み |
 | [chess-mcp](https://github.com/turlockmike/chess-mcp) | Stockfishによる局面評価・盤面表示・定跡データベース検索を提供 |
-| [mcp-chess](https://github.com/alexandreroman/mcp-chess) | 盤面画像生成・合法手チェックに加え、次の一手の提案自体を外部エンジンAPIに委任 |
+| [mcp-chess](https://github.com/alexandreroman/mcp-chess) | 盤面画像生成・合法手チェックに加え、次の一手の提案自体をStockfish.online APIに委任 |
 | [chessagine-mcp](https://github.com/jalpp/chessagine-mcp) | Stockfish/Leela/Maia等複数エンジン+定跡DB+Lichess連携で評価値・最善手を横断的に提供 |
-| [games-dash](https://github.com/sandraschi/games-dash) | 50以上のブラウザゲーム+7エンジン(将棋はやねうら王)をMCP経由で統合するプラットフォーム |
-| [将棋エンジンを作る〜(Zennスクラップ)](https://zenn.dev/sh11235/scraps/3456d57f674c73) | 生成AIをコーディング支援に使いながら将棋エンジン自体をRustで開発するログ(対局用途ではない) |
-| [AIがあなたの将棋コーチになる時代(note)](https://note.com/hip_rabbit9861/n/n8554c67ae99a) | AIを将棋コーチとして使う話題を扱った記事 |
+| [games-dash](https://github.com/sandraschi/games-dash) | 100以上のゲーム+7エンジン(将棋はやねうら王)をMCP経由で統合するプラットフォーム |
+| [将棋エンジンを作る〜(Zennスクラップ)](https://zenn.dev/sh11235/scraps/3456d57f674c73) | Claude Codeに将棋の対戦AIロジック自体を書かせた記録。専用エンジンによる補強なしでは「違和感のある手」を指し、既存の無料将棋サイトのAIにも及ばなかったとの結果 |
+| [AIがあなたの将棋コーチになる時代(note)](https://note.com/hip_rabbit9861/n/n8554c67ae99a) | 駒をクリックして対局できる盤面つきのHTML/Artifactツール。解説生成ボタンでClaudeが局面を解説する仕組み |
 
 本ツールはこれらとは逆の方針を取る。`analyze_position`/`verify_moves`/`simulate_line`はいずれも
 将棋エンジンを使わない自前実装で、返すのは詰み筋・危険手・材料損得といった「検証」情報のみ。
 評価値や最善手をエンジンから取得してClaudeにそのまま渡すことは、`/shogi-brain`・`/shogi-csa`の
 どちらのモードでも意図的に避けている。指し手の決定はあくまでClaudeの大局観に委ねており、
 「LLM自身がどこまで指せるか」を検証することが本ツールの目的のため。
+
+上記の中では、Zennスクラップの「対戦AIを作る」試みが目的として最も近い(専用エンジンに
+頼らずLLM/生成AIで対局ロジックを作る)。同スクラップでは専用エンジンによる補強なしのAIが
+既存の無料将棋サイトのAIにも及ばなかったと報告されており、本ツールは局面解析ツール
+(詰み探索・候補手検証・読み筋シミュレータ、いずれも将棋エンジン不使用)による補助を
+与えることで、その差を縮められるか試している。
 
 ## 強さ
 
