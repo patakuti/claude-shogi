@@ -19,9 +19,12 @@ argument-hint: [KIFファイルパス(省略時はgames/内の最新ファイル
    既に終局している場合)、その旨を伝えて終了する。
 6. `status`が`"playing"`なら、戻り値の`mode`フィールドを見て、対応するモードの
    進め方で対局を継続する(`new_game`は呼ばない。既に対局は読み込み済み)。
-   - `mode` が `"auto"` → `/shogi-auto` と同じ進め方(会話を挟まず自動で進める)
-   - `mode` が `"discuss"` → `/shogi-discuss` と同じ進め方(一手ごとに提案してから指す)
-   - `mode` が `"user"` → `/shogi-user` と同じ進め方(ユーザーの自然言語指示を待つ)
+   - `mode` が `"auto"` → 自動モード(会話を挟まず、ユーザー側の手も自動で決めて指す。
+     終局や山場のみ報告)
+   - `mode` が `"discuss"` → Claude対話モード(一手ごとに「こう指そうと思う、理由は〜」と
+     提案してから指す)
+   - `mode` が `"user"` → ユーザー対話モード(「7六歩」のような自然言語の指示を
+     指し手に変換して指す)
    - `mode` が `"brain"` → `/shogi-brain` と同じ進め方(エンジンのヒントなしでClaude自身が
      考えて指す。`engine_hint`は呼ばず、`analyze_position` / `verify_moves` / `simulate_line`を使う)
    - `mode` が `"csa"` → `/shogi-csa` と同じ進め方(ユーザー側はCSA対応クライアントから、
