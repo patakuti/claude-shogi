@@ -7,6 +7,7 @@ from unittest import mock
 import pytest
 
 from shogi_mcp import server
+from shogi_mcp.usi_engine import ThinkResult
 
 ENGINE_PATH = server.ENGINE_PATH
 
@@ -46,6 +47,22 @@ def test_get_state_reflects_new_game():
     result = server.get_state()
     assert result["ok"]
     assert result["turn"] == "black"
+
+
+def test_get_state_omits_board_and_legal_moves_by_default():
+    # 毎手呼ばれるget_stateは、会話コンテキストを圧迫するboard/legal_movesを
+    # 既定で省略する(02_design.md §29)。
+    server.new_game(difficulty=1, user_side="black")
+    result = server.get_state()
+    assert "board" not in result
+    assert "legal_moves" not in result
+
+
+def test_get_state_includes_board_and_legal_moves_when_requested():
+    server.new_game(difficulty=1, user_side="black")
+    result = server.get_state(include_board=True, include_legal_moves=True)
+    assert "歩" in result["board"]  # 盤面テキストが実際に返っていること
+    assert len(result["legal_moves"]) == 30
 
 
 def test_state_and_kif_include_player_names():
@@ -107,6 +124,13 @@ def test_apply_move_rejects_illegal_move_with_candidates():
     assert result["error"] == "illegal_move"
 
 
+def test_apply_move_omits_board_and_legal_moves_by_default():
+    server.new_game(difficulty=1, user_side="black")
+    result = server.apply_move("7g7f")
+    assert "board" not in result
+    assert "legal_moves" not in result
+
+
 def test_engine_move_thinks_and_updates_board():
     server.new_game(difficulty=1, user_side="black")
     server.apply_move("7g7f")
@@ -116,6 +140,21 @@ def test_engine_move_thinks_and_updates_board():
     assert result["turn"] == "black"
     assert result["last_move"] is not None
     assert "think" in result
+    assert "board" not in result
+    assert "legal_moves" not in result
+
+
+def test_engine_move_resign_always_includes_board():
+    # engine_moveの投了/入玉宣言勝ち分岐は、報告タイミング(終局)に必ず該当するため
+    # include_boardの指定に関わらず常にboardを含める(02_design.md §29.1)。
+    server.new_game(difficulty=1, user_side="black")
+    server.apply_move("7g7f")
+    with mock.patch.object(
+        server._session.engine, "go", return_value=ThinkResult(bestmove="resign")
+    ):
+        result = server.engine_move()
+    assert result["status"] == "engine_resigned"
+    assert "board" in result
 
 
 def test_apply_move_includes_attack_report_for_both_sides():
@@ -475,3 +514,5 @@ def test_wait_for_user_move_moved_response_unchanged():
     assert result["move_number"] == 2
     assert result["turn"] == "white"
     assert "attack_report" in result
+    assert "board" not in result
+    assert "legal_moves" not in result

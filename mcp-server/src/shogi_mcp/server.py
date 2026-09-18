@@ -145,16 +145,24 @@ def _move_info(m: rules.MoveInfo) -> dict:
     return {"usi": m.usi, "kif": m.kif}
 
 
-def _state_dict(session: SessionState) -> dict:
+def _state_dict(
+    session: SessionState,
+    include_board: bool = True,
+    include_legal_moves: bool = True,
+) -> dict:
+    """対局状態の共通辞書。board/legal_movesは毎手呼ばれるツールでは肥大化するため
+
+    既定はTrue(new_game/load_kif/resignなど、1対局に1回だけ呼ばれる呼び出し元向け)。
+    毎手呼ばれるget_state/apply_move/engine_move/wait_for_user_moveは、実際に
+    表示・退避先網羅が必要な時だけFalseから明示的にTrueへ切り替える(02_design.md §29)。
+    """
     game = session.game
     last = game.last_move()
-    return {
+    result = {
         "ok": True,
         "sfen": game.sfen(),
-        "board": game.board_display(),
         "turn": game.turn(),
         "move_number": game.move_number(),
-        "legal_moves": [_move_info(m) for m in game.legal_moves()],
         "status": session.status(),
         "in_check": game.in_check(),
         "last_move": _move_info(last) if last else None,
@@ -163,6 +171,11 @@ def _state_dict(session: SessionState) -> dict:
         "mode": session.mode,
         "players": dict(zip(("black", "white"), session.player_names())),
     }
+    if include_board:
+        result["board"] = game.board_display()
+    if include_legal_moves:
+        result["legal_moves"] = [_move_info(m) for m in game.legal_moves()]
+    return result
 
 
 def _attack_report(session: SessionState) -> dict:
@@ -301,21 +314,37 @@ def new_game(
 
 
 @mcp.tool()
-def get_state() -> dict:
-    """現在の対局状態(SFEN・盤面表示・合法手一覧・終局判定)を返す。"""
+def get_state(include_board: bool = False, include_legal_moves: bool = False) -> dict:
+    """現在の対局状態(SFEN・手番・終局判定など)を返す。
+
+    毎手呼ばれるツールのため、board(盤面テキスト)とlegal_moves(全合法手のusi/kif
+    ペア、80〜130件)は既定で省略する(02_design.md §29)。盤面を表示したいとき
+    (王手・駒損得・終局などの報告タイミング)はinclude_board=True、駒の退避先を
+    網羅したいとき(当たられた駒の移動先をlegal_movesからフィルタする場面)は
+    include_legal_moves=Trueを指定する。
+    """
     with _session_lock:
         session = _current_session()
         if session is None:
             return {"ok": False, "error": "no_active_game"}
-        return _state_dict(session)
+        return _state_dict(
+            session, include_board=include_board, include_legal_moves=include_legal_moves
+        )
 
 
-def _apply_validated_move(session: SessionState, move: str, comment: str = "") -> dict:
+def _apply_validated_move(
+    session: SessionState,
+    move: str,
+    comment: str = "",
+    include_board: bool = False,
+    include_legal_moves: bool = False,
+) -> dict:
     """指し手(USI表記)の合法性チェック→盤面反映→自動保存→attack_report生成。
 
     呼び出し元は`_session_lock`を保持済みであること。`apply_move`MCPツール、および
     csa_server.py(人間側からCSAプロトコル経由で届いた指し手)の両方から呼ばれる
     共有ヘルパー(02_design.md §26.5。重複実装によるロジックのズレを避けるため)。
+    include_board/include_legal_movesは毎手呼ばれるため既定False(§29、_state_dict参照)。
     """
     result = session.game.apply_move(move)
     if not result.ok:
@@ -327,13 +356,15 @@ def _apply_validated_move(session: SessionState, move: str, comment: str = "") -
     if comment:
         session.add_comment_lines(session.last_move_number(), [comment])
     session.autosave()
-    state = _state_dict(session)
+    state = _state_dict(session, include_board=include_board, include_legal_moves=include_legal_moves)
     state["attack_report"] = _attack_report(session)
     return state
 
 
 @mcp.tool()
-def apply_move(move: str, comment: str = "") -> dict:
+def apply_move(
+    move: str, comment: str = "", include_board: bool = False, include_legal_moves: bool = False
+) -> dict:
     """指し手(USI表記, 例: 7g7f / P*5e / 2b3a+)を適用する。ユーザー側・Claude側共通で使う。
 
     commentが非空なら、この手へのコメント(狙い・読みなど)としてKIFに記録する
@@ -341,6 +372,8 @@ def apply_move(move: str, comment: str = "") -> dict:
     応答にはattack_report(§14.2。user_pieces=放置すると取られる警告、
     engine_pieces=取れる駒の機会。king_only_defense=紐が玉のみであることを示す、
     §19.1)を毎回含む。
+    board/legal_movesは毎手呼ばれるため既定で省略する(§29)。盤面を表示したい
+    報告タイミングではinclude_board=Trueを指定する。
     """
     session = _current_session()
     if session is None:
@@ -349,11 +382,15 @@ def apply_move(move: str, comment: str = "") -> dict:
         return {"ok": False, "error": "game_already_over"}
 
     with _session_lock:
-        return _apply_validated_move(session, move, comment)
+        return _apply_validated_move(
+            session, move, comment, include_board=include_board, include_legal_moves=include_legal_moves
+        )
 
 
 @mcp.tool()
-def wait_for_user_move(timeout_seconds: int = 8) -> dict:
+def wait_for_user_move(
+    timeout_seconds: int = 8, include_board: bool = False, include_legal_moves: bool = False
+) -> dict:
     """CSA対局モード(mode="csa")で、人間側(CSAクライアント経由)の着手を待つ。
 
     csa_server.pyが人間側の指し手を反映するまで、対局の手数を短い間隔でポーリングする。
@@ -367,6 +404,7 @@ def wait_for_user_move(timeout_seconds: int = 8) -> dict:
     ロジック自体の変更ではない)。
     対局が終了(投了・詰み等)していた場合は`status: "game_over"`を含む最新状態を返す。
     mode != "csa"のときはエラーを返す。
+    board/legal_movesは毎手ポーリングされるため既定で省略する(§29)。
     """
     session = _current_session()
     if session is None:
@@ -385,11 +423,15 @@ def wait_for_user_move(timeout_seconds: int = 8) -> dict:
             # SessionState.is_game_over()もその範囲に留まる)。CSA対局モードの
             # 終局検知はstatus()文字列で判定し、全終局理由を漏れなく拾う。
             if session.status() != rules.STATUS_PLAYING:
-                state = _state_dict(session)
+                state = _state_dict(
+                    session, include_board=include_board, include_legal_moves=include_legal_moves
+                )
                 state["status_wait"] = "game_over"
                 return state
             if session.last_move_number() != start_move_number:
-                state = _state_dict(session)
+                state = _state_dict(
+                    session, include_board=include_board, include_legal_moves=include_legal_moves
+                )
                 state["attack_report"] = _attack_report(session)
                 state["status_wait"] = "moved"
                 return state
@@ -404,13 +446,19 @@ def wait_for_user_move(timeout_seconds: int = 8) -> dict:
 
 
 @mcp.tool()
-def engine_move(byoyomi_ms: int = 0) -> dict:
+def engine_move(
+    byoyomi_ms: int = 0, include_board: bool = False, include_legal_moves: bool = False
+) -> dict:
     """コンピュータ側の手をやねうら王に思考させ、盤面へ反映して返す。
 
     byoyomi_ms=0の場合は現在の難易度プリセットの秒読みを使う。
     応答にはattack_report(§14.2。user_pieces=放置すると取られる警告、
     engine_pieces=取れる駒の機会。king_only_defense=紐が玉のみであることを示す、
     §19.1)を毎回含む。
+    board/legal_movesは毎手呼ばれるため既定で省略する(§29)。ただしエンジンが
+    投了(status: engine_resigned)・入玉宣言勝ち(engine_win_nyugyoku)した場合は
+    終局の報告タイミング(§29)に必ず該当するため、include_boardの指定に関わらず
+    boardを常に含める。
     """
     session = _current_session()
     if session is None:
@@ -437,11 +485,11 @@ def engine_move(byoyomi_ms: int = 0) -> dict:
 
     with _session_lock:
         if think.bestmove == "resign":
-            result = _state_dict(session)
+            result = _state_dict(session, include_board=True, include_legal_moves=include_legal_moves)
             result["status"] = "engine_resigned"
             return result
         if think.bestmove == "win":
-            result = _state_dict(session)
+            result = _state_dict(session, include_board=True, include_legal_moves=include_legal_moves)
             result["status"] = "engine_win_nyugyoku"
             return result
 
@@ -454,7 +502,7 @@ def engine_move(byoyomi_ms: int = 0) -> dict:
         if eval_line is not None:
             session.add_comment_lines(session.last_move_number(), [eval_line])
         session.autosave()
-        result = _state_dict(session)
+        result = _state_dict(session, include_board=include_board, include_legal_moves=include_legal_moves)
         primary = think.primary
         result["think"] = {
             "score_cp": primary.score_cp if primary else None,
