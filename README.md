@@ -179,7 +179,11 @@ MCPサーバー(`shogi`)が提供するツールは大きく3種類。呼ばれ�
 - **対局進行**(毎手呼ばれる): `new_game` / `get_state` / `apply_move` / `engine_move` /
   `engine_hint` / `save_kif` / `load_kif` / `resign` / `add_comment`。`apply_move`/
   `engine_move`の応答には毎回`attack_report`(両者の駒への当たり一覧)を含み、放置すると
-  取られる駒が毎手必ず目に入るようにしている。
+  取られる駒が毎手必ず目に入るようにしている。`get_state`/`apply_move`/`engine_move`/
+  `wait_for_user_move`の`board`(盤面テキスト)と`legal_moves`(全合法手一覧)は、
+  毎手の応答に無条件で含めると会話コンテキストを圧迫するため既定で省略される
+  (`include_board`/`include_legal_moves`引数でオプトイン)。`new_game`/`load_kif`/
+  `resign`のように1対局に1回だけ呼ばれるツールは従来どおり常に含む。
 - **局面解析**(将棋エンジン不使用、cshogiベースの自前実装。Claude思考モードの中核):
   `analyze_position`(詰み筋・詰めろ・自駒への当たり・玉の安全度・大駒の両取り機会/
   捕獲確定〈トラップ〉などを解析)は毎手呼ばれ、その結果(詰み逃し防止・王手回避・
