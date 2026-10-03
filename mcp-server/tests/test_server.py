@@ -516,3 +516,41 @@ def test_wait_for_user_move_moved_response_unchanged():
     assert "attack_report" in result
     assert "board" not in result
     assert "legal_moves" not in result
+
+
+def test_rank_moves_without_active_game():
+    assert server.rank_moves() == {"ok": False, "error": "no_active_game"}
+
+
+def test_rank_moves_returns_summary_without_moving():
+    # (h) KIF表記の付与・盤面不変・直前の手を踏まえた「同」表記。
+    server.new_game(difficulty=1, user_side="black", mode="brain")
+    before = server.get_state()["sfen"]
+    result = server.rank_moves(top_n=5)
+    assert result["ok"]
+    assert result["legal_count"] == 30
+    assert len(result["top"]) == 5
+    assert all(e["kif"] for e in result["top"])
+    assert server.get_state()["sfen"] == before
+
+    for usi in ("7g7f", "3c3d", "8h2b+"):
+        server.apply_move(usi)
+    kifs = [e["kif"] for e in server.rank_moves(top_n=30)["top"]]
+    assert any(k.startswith("同") for k in kifs)  # 3a2bの同銀
+
+
+def test_rank_moves_clamps_top_n_and_depth():
+    # (h) top_nは[1, 30]、depthは[1, 2](§31.1の実測根拠)。
+    server.new_game(difficulty=1, user_side="black", mode="brain")
+    captured = {}
+    original = server.analysis.rank_moves
+
+    def spy(board, top_n, depth, prev_move):
+        captured["top_n"], captured["depth"] = top_n, depth
+        return original(board, top_n=top_n, depth=depth, prev_move=prev_move)
+
+    with mock.patch.object(server.analysis, "rank_moves", side_effect=spy):
+        server.rank_moves(top_n=0, depth=0)
+        assert (captured["top_n"], captured["depth"]) == (1, 1)
+        server.rank_moves(top_n=1_000, depth=9)
+        assert (captured["top_n"], captured["depth"]) == (30, 2)

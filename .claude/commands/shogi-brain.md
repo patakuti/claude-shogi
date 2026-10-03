@@ -24,8 +24,8 @@ argument-hint: [difficulty 1-5] [user_side black|white]
 ## 最重要ルール
 
 **`engine_hint`は絶対に呼ばない。** ユーザー側の手の決定にエンジンの評価値・候補手を使わない
-ことがこのモードの本質。使ってよい補助ツールは `analyze_position` / `verify_moves` /
-`simulate_line`(いずれもcshogiベースの機械検証で、思考エンジンではない)。
+ことがこのモードの本質。使ってよい補助ツールは `analyze_position` / `rank_moves` /
+`verify_moves` / `simulate_line`(いずれもcshogiベースの機械検証で、思考エンジンではない)。
 
 ## ユーザー側手番の実行方法(fork委譲)
 
@@ -149,6 +149,23 @@ argument-hint: [difficulty 1-5] [user_side black|white]
      `engine_pieces`の`hanging: true`はタダ取りの機会として候補手に含める。
      いずれの一覧でも`pawn_drop_risk: true`は上記と同様、盤上の利きがなくても放置しない。
 3. それ以外は自分で方針を立て、候補手を3〜5手選んで `verify_moves(moves)` にかける。
+   - **候補を選ぶ前に、毎手番`rank_moves()`を呼ぶ**(全合法手を浅く評価した上位の要約。
+     候補手の選び漏れ対策。主観で選んだ候補に最善手が入っておらず、ツール自身の
+     評価では1位だった手を見落として敗着になった実例がある)。
+     - `mates`が空でなければ、その手を`verify_moves`で確認して指す。
+     - `top_tied`が3以下なら、`top`の上位3手を自分の構想手と併せて**必ず**
+       `verify_moves`の候補に含める(合計10手以内)。最終的にそれ以外の手を
+       選ぶ場合は、上位手を退けた理由(`verify_moves`のどの項目で劣ったか)を
+       `apply_move`の`comment`に1行残す。
+     - `top_tied`が4以上(序盤など、多数の手が横並び)なら上の強制は外し、
+       従来どおり自分の構想で選ぶ。このとき`top`の並びは合法手の生成順に
+       すぎないので参考にしない。
+     - 終盤の勝負所(`king_safety.mating_net_risk`がtrue、または自玉・敵玉に
+       王手・詰めろが絡む局面)では`rank_moves(depth=2)`で呼ぶ(合法手が多いと
+       20秒強かかるため、それ以外では既定の深さ1を使う)。
+     - `rank_moves`は検証にかける候補を漏らさないための道具であり、指す手を
+       決める道具ではない。浅い評価値の1位をそのまま指さず、最終判断は
+       `verify_moves`の結果と自分の構想で行う。
    - **自分の駒が当たられて退避する場面では、`get_state(include_legal_moves=True)`の
      `legal_moves`からその駒の移動先を全てフィルタして`verify_moves`に渡す**
      (`legal_moves`は毎手番の会話コンテキストを圧迫するため既定で省略される。

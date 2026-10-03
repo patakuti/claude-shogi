@@ -927,6 +927,78 @@ def verify_moves(
     return results
 
 
+def rank_moves(
+    board: cshogi.Board,
+    top_n: int = 10,
+    depth: int = 1,
+    node_limit: int = DEFAULT_NODE_LIMIT,
+    mate_ply: int = DEFAULT_MATE_PLY,
+    prev_move: Optional[int] = None,
+) -> dict:
+    """全合法手の事前スクリーニング(§31.2)。盤面は変更しない。
+
+    全合法手を浅い探索(材料点+玉の安全度、§13.5)で評価し、手番側視点の
+    評価値(score)の降順に上位top_n件を返す。詰ます手はmatesに分け、
+    頓死する手(着手後に相手からmate_ply手以内の詰み)は除外して件数のみ
+    allows_mate_countに数える。material_changeはverify_movesと同じく
+    読み筋(PV)適用後の実材料点差。打ち切りで1回も探索が完了しなかった手は
+    score=Noneとして末尾に置く。top_tiedは1位と同じscoreの手の数。
+    prev_moveは直前の指し手(KIF表記の「同」判定用。Noneなら考慮しない)。
+    """
+    copy = _copy_board(board)
+    mover_is_black = copy.turn == cshogi.BLACK
+    base_black, base_white = material(copy)
+    mates: list[dict] = []
+    ranked: list[dict] = []
+    allows_mate_count = 0
+    legal = list(copy.legal_moves)
+    for move in legal:
+        info = {"usi": cshogi.move_to_usi(move), "kif": KIF.move_to_kif(move, prev_move)}
+        copy.push(move)
+        try:
+            if copy.is_game_over():
+                mates.append(info)
+                continue
+            if find_mate(copy, mate_ply) is not None:
+                allows_mate_count += 1
+                continue
+            info["check"] = copy.is_check()
+            searcher = _Searcher(copy, node_limit)
+            score, pv, completed_depth = _iterative_deepen(searcher, depth)
+            if completed_depth == 0 or score is None:
+                info["score"] = None
+                info["material_change"] = None
+            else:
+                for m in pv:
+                    copy.push(m)
+                end_black, end_white = material(copy)
+                for _ in pv:
+                    copy.pop()
+                info["score"] = -score
+                if mover_is_black:
+                    info["material_change"] = (end_black - end_white) - (base_black - base_white)
+                else:
+                    info["material_change"] = (end_white - end_black) - (base_white - base_black)
+            ranked.append(info)
+        finally:
+            copy.pop()
+
+    ranked.sort(key=lambda e: e["score"] if e["score"] is not None else -MATE_SCORE * 10, reverse=True)
+    top_score = ranked[0]["score"] if ranked else None
+    top_tied = sum(1 for e in ranked if e["score"] == top_score) if top_score is not None else 0
+    return {
+        "legal_count": len(legal),
+        "depth": depth,
+        "mates": mates,
+        "allows_mate_count": allows_mate_count,
+        "top": [
+            {k: e[k] for k in ("usi", "kif", "score", "material_change", "check")}
+            for e in ranked[:top_n]
+        ],
+        "top_tied": top_tied,
+    }
+
+
 def _unpromoted(piece_type: int) -> int:
     if piece_type in (cshogi.PROM_PAWN,):
         return cshogi.PAWN

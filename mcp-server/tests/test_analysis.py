@@ -1906,3 +1906,70 @@ def test_simulate_line_reports_illegal_move():
     result = analysis.simulate_line(board, ["7g7f", "7f7e", "3c3d"])
     assert result["applied"] == ["7g7f"]
     assert result["illegal_move"] == {"index": 1, "usi": "7f7e"}
+
+
+# --- rank_moves(§31) ---------------------------------------------------------
+# games/2026-10-03_162757.kif(ピヨ丸Lv22戦、Claude後手)の局面。局後のやねうら王解析で
+# 敗着・緩手となった手番。
+RANK_MOVE86_SFEN = "ln3k1s1/3r1ss2/pg2p2s1/2p2+Bp1g/1p1p1n3/P1P6/1PSP1+r3/K1GG5/LN5+b1 w L2Pn6p 86"
+RANK_MOVE90_SFEN = "ln3k1s1/3r1s3/pg2pP1s1/2p2+Bp1g/1p1p1n3/P1P6/1PSP1+r3/K1GG5/LN5+b1 w LPnl6p 90"
+RANK_MOVE92_SFEN = "ln3k1s1/3r1+Pn2/pg2p2s1/2p2+Bp1g/1p1p1n3/P1P6/1PSP1+r3/K1GG5/LN5+b1 w SLPl6p 92"
+
+
+def _top_usis(result, n=3):
+    return [e["usi"] for e in result["top"][:n]]
+
+
+def test_rank_moves_move90_finds_engine_best_retreat():
+    # (a) △５一銀(やねうら王の最善)は深さ2で単独1位、深さ1でも上位3手に入る。
+    board = cshogi.Board(RANK_MOVE90_SFEN)
+    assert analysis.rank_moves(board, depth=2)["top"][0]["usi"] == "4b5a"
+    assert "4b5a" in _top_usis(analysis.rank_moves(board, depth=1))
+
+
+def test_rank_moves_move86_finds_attacking_move():
+    # (b) △５七桂成(やねうら王の読み筋の初手)が上位3手に入る。
+    board = cshogi.Board(RANK_MOVE86_SFEN)
+    assert "4e5g+" in _top_usis(analysis.rank_moves(board, depth=1))
+
+
+def test_rank_moves_move92_prefers_rook_recapture_over_king():
+    # (c) 合法手2つ(同玉/同飛)。玉の安全度を含む評価値で同飛が上になる。
+    board = cshogi.Board(RANK_MOVE92_SFEN)
+    result = analysis.rank_moves(board, depth=1)
+    assert result["legal_count"] == 2
+    assert result["top"][0]["usi"] == "6b4b"
+
+
+def test_rank_moves_separates_mating_move():
+    # (d) 詰ます手はmatesに入り、topには含まれない。
+    board = cshogi.Board(MATE_IN_1_SFEN)
+    result = analysis.rank_moves(board)
+    assert "G*5b" in [e["usi"] for e in result["mates"]]
+    assert "G*5b" not in [e["usi"] for e in result["top"]]
+
+
+def test_rank_moves_excludes_moves_allowing_mate():
+    # (e) 頓死する手(G*1e: 放置すると△G*5hで詰み)はtopから除外され件数に数えられる。
+    board = cshogi.Board(SUDDEN_DEATH_SFEN)
+    result = analysis.rank_moves(board, top_n=30)
+    assert result["allows_mate_count"] >= 1
+    assert "G*1e" not in [e["usi"] for e in result["top"]]
+
+
+def test_rank_moves_initial_position_all_tied():
+    # (f) 序盤は駒の損得・玉の危険度でほぼ差がつかない(既知の限界、§31.1)。
+    # 実測: 30手中29手が同点(6八玉のみ玉の安全度で-40)。
+    result = analysis.rank_moves(cshogi.Board(), top_n=10)
+    assert result["legal_count"] == 30
+    assert result["top_tied"] == 29
+    assert len(result["top"]) == 10
+    assert set(result["top"][0]) == {"usi", "kif", "score", "material_change", "check"}
+
+
+def test_rank_moves_does_not_mutate_board():
+    # (g)
+    board = cshogi.Board(RANK_MOVE86_SFEN)
+    before = board.sfen()
+    analysis.rank_moves(board)
+    assert board.sfen() == before
