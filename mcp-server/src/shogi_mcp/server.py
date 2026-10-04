@@ -565,7 +565,8 @@ def analyze_position() -> dict:
     駒割り(material)・持ち駒(hands)・手番側から相手玉への詰み(mate_for_side_to_move)・
     手番側が放置した場合に相手から詰まされるか=詰めろ(mate_threat_against_side_to_move)・
     手番側の駒への当たり一覧(attacked_pieces。相手の利き数/味方の紐の数/浮き駒かどうか。
-    相手の持ち駒の歩による当たりを示すpawn_drop_riskも含む、§15.1)を含む。
+    相手の持ち駒の歩による当たりを示すpawn_drop_riskも含む、§15.1。打たれた歩を
+    ただで取り返せる打ち込み先は除外、§32.2)を含む。
     king_only_defense(§19.1)は、紐が1つ以上あり、かつその全てが自玉である場合に
     true。実際に取り返すと玉自身が危険になる特殊なケースで、hanging(紐なし)と同様に
     実質的な無防備として扱うべき(hangingとは排他)。
@@ -646,6 +647,7 @@ def verify_moves(
     own_supports。opponent_effects>0かつown_supports==0はタダ捨ての警告)・
     own_attacked_after(着手直後の自駒への当たり上位5件。§13.3のattacked_pieces形式。
     盤上の利きに加え、相手の持ち駒の歩による当たりも`pawn_drop_risk`で示す。§15.1。
+    打たれた歩をただで取り返せる打ち込み先は除外する、§32.2。
     king_only_defenseは紐が玉のみであることを示す、§19.1)・
     search_depth_completed(反復深化で完了した深さ。0なら信頼できる読みなし)・
     material_change(双方が材料点上の最善を尽くした場合の材料点差の変化。負なら駒損。

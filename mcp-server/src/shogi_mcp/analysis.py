@@ -266,6 +266,9 @@ def _pawn_drop_risk(pieces: list[int], opp_color: int, opp_pawn_count: int, sq: 
 
     sqから見て相手が前進する方向に1段の打ち込み先が、盤内・空きマス・
     二歩でなく・opp_colorにとっての最終段でもないことを確認する。
+    打ち込み先に自分の駒の利きがあり相手の駒の利きがない(打たれた歩をただで
+    取り返せる)場合は脅威としない(§32.2)。静的な利き数による判定で、
+    ピン等の手順は考慮しない。
     """
     if opp_pawn_count <= 0:
         return False
@@ -282,6 +285,9 @@ def _pawn_drop_risk(pieces: list[int], opp_color: int, opp_pawn_count: int, sq: 
     illegal_rank = 0 if opp_color == cshogi.BLACK else 8
     if origin_rank == illegal_rank:
         return False
+    own_color = cshogi.WHITE if opp_color == cshogi.BLACK else cshogi.BLACK
+    if attackers(pieces, own_color, origin_sq) and not attackers(pieces, opp_color, origin_sq):
+        return False
     return True
 
 
@@ -290,7 +296,8 @@ def attacked_pieces(board: cshogi.Board, color: Optional[int] = None) -> list[di
 
     colorを省略すると従来どおり手番側。ピンや取り合いの手順は考慮しない静的な
     利き数。玉への当たり=王手はin_checkで報告する。盤上の利きに加え、相手の
-    持ち駒の歩による当たり(pawn_drop_risk)も判定する(§15.1)。
+    持ち駒の歩による当たり(pawn_drop_risk)も判定する(§15.1。打たれた歩をただで
+    取り返せる打ち込み先は除外、§32.2)。
 
     紐(defenders)が1つ以上あり、かつその全てが自玉である場合は
     king_only_defense: trueを返す(§19.1)。玉による「防御」は実際に取り返すと

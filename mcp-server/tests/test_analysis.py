@@ -344,15 +344,28 @@ def test_attacked_pieces_color_param_reports_other_side():
 
 # --- pawn_drop_risk(§15.1: 歩打ちの当たり検知) --------------------------------
 
-# 先手銀5五(盤上の当たりなし)、後手が持ち駒に歩1枚。5四が空いているため打たれる。
-PAWN_DROP_RISK_SFEN = "4k4/9/9/9/4S4/9/9/9/4K4 b p 1"
+# 先手桂5五(盤上の当たりなし)、後手が持ち駒に歩1枚。5四が空いているため打たれる。
+# 桂は真上(5四)に利かないため、打たれた歩を取り返せない(§32.2の条件5に該当しない)。
+PAWN_DROP_RISK_SFEN = "4k4/9/9/9/4N4/9/9/9/4K4 b p 1"
 
 # 上と同型だが、5二に後手の不成の歩が既にある(二歩のため5四には打てない)。
-NIFU_BLOCKED_SFEN = "4k4/4p4/9/9/4S4/9/9/9/4K4 b p 1"
+NIFU_BLOCKED_SFEN = "4k4/4p4/9/9/4N4/9/9/9/4K4 b p 1"
 
 # 上と同型だが、5四(打ち込み先)に後手の角があり空いていない。角は同じ筋を直射しない
-# ため5五の銀を攻撃せず、「空きマスでない」条件だけを二歩・当たりから独立に検証できる。
-OCCUPIED_ORIGIN_SFEN = "4k4/9/9/4b4/4S4/9/9/9/4K4 b p 1"
+# ため5五の桂を攻撃せず、「空きマスでない」条件だけを二歩・当たりから独立に検証できる。
+OCCUPIED_ORIGIN_SFEN = "4k4/9/9/4b4/4N4/9/9/9/4K4 b p 1"
+
+# §32.2 条件5: 打たれた歩をただで取り返せる打ち込み先は脅威としない。
+# 先手銀5五。銀自身が5四に利き、後手の利きはない。
+DROP_RECAPTURED_BY_TARGET_SFEN = "4k4/9/9/9/4S4/9/9/9/4K4 b p 1"
+# 先手桂5五・金4五。桂は5四に利かないが、金が5四に利き、後手の利きはない。
+DROP_RECAPTURED_BY_OTHER_SFEN = "4k4/9/9/9/4NG3/9/9/9/4K4 b p 1"
+# 先手銀5五、後手金5三。銀は5四に利くが、後手の金も5四に利く(叩きの歩)。
+DROP_CONTESTED_SFEN = "4k4/9/4g4/9/4S4/9/9/9/4K4 b p 1"
+# games/2026-10-03_195927.kif 45手目▲７九玉の局面(後手番、双方の持ち駒は歩1枚)。
+# １一香(１二に自身が利く)・２一桂(２二に３二金が利く)は先手の利きがなく取り返せる。
+# １四歩(１五に先手の１九香が利く)・２三歩(２四に先手の２六飛が利く)は脅威が残る。
+GAME_M45_SFEN = "ln3k1nl/3sgsg2/2ppppbp1/1r4p1p/pp7/7R1/PPPPPPP2/1BGS1GS2/LNK4NL w Pp 46"
 
 
 def test_attacked_pieces_detects_pawn_drop_risk_with_no_board_attackers():
@@ -364,6 +377,34 @@ def test_attacked_pieces_detects_pawn_drop_risk_with_no_board_attackers():
     assert entry["cheapest_attacker"] is None
     assert entry["hanging"]
     assert entry["pawn_drop_risk"]
+
+
+def test_attacked_pieces_pawn_drop_risk_false_when_target_recaptures():
+    board = cshogi.Board()
+    board.set_sfen(DROP_RECAPTURED_BY_TARGET_SFEN)
+    assert analysis.attacked_pieces(board, color=cshogi.BLACK) == []
+
+
+def test_attacked_pieces_pawn_drop_risk_false_when_other_piece_recaptures():
+    board = cshogi.Board()
+    board.set_sfen(DROP_RECAPTURED_BY_OTHER_SFEN)
+    assert analysis.attacked_pieces(board, color=cshogi.BLACK) == []
+
+
+def test_attacked_pieces_pawn_drop_risk_true_when_drop_square_contested():
+    board = cshogi.Board()
+    board.set_sfen(DROP_CONTESTED_SFEN)
+    (entry,) = analysis.attacked_pieces(board, color=cshogi.BLACK)
+    assert entry["square"] == "5五"
+    assert entry["attackers"] == 0
+    assert entry["pawn_drop_risk"]
+
+
+def test_attacked_pieces_pawn_drop_risk_game_m45_excludes_recapturable_drops():
+    board = cshogi.Board()
+    board.set_sfen(GAME_M45_SFEN)
+    risky = {e["square"] for e in analysis.attacked_pieces(board) if e["pawn_drop_risk"]}
+    assert risky == {"1四", "2三"}
 
 
 def test_attacked_pieces_pawn_drop_risk_blocked_by_nifu():
