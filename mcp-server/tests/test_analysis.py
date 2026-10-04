@@ -344,15 +344,28 @@ def test_attacked_pieces_color_param_reports_other_side():
 
 # --- pawn_drop_risk(§15.1: 歩打ちの当たり検知) --------------------------------
 
-# 先手銀5五(盤上の当たりなし)、後手が持ち駒に歩1枚。5四が空いているため打たれる。
-PAWN_DROP_RISK_SFEN = "4k4/9/9/9/4S4/9/9/9/4K4 b p 1"
+# 先手桂5五(盤上の当たりなし)、後手が持ち駒に歩1枚。5四が空いているため打たれる。
+# 桂は真上(5四)に利かないため、打たれた歩を取り返せない(§32.2の条件5に該当しない)。
+PAWN_DROP_RISK_SFEN = "4k4/9/9/9/4N4/9/9/9/4K4 b p 1"
 
 # 上と同型だが、5二に後手の不成の歩が既にある(二歩のため5四には打てない)。
-NIFU_BLOCKED_SFEN = "4k4/4p4/9/9/4S4/9/9/9/4K4 b p 1"
+NIFU_BLOCKED_SFEN = "4k4/4p4/9/9/4N4/9/9/9/4K4 b p 1"
 
 # 上と同型だが、5四(打ち込み先)に後手の角があり空いていない。角は同じ筋を直射しない
-# ため5五の銀を攻撃せず、「空きマスでない」条件だけを二歩・当たりから独立に検証できる。
-OCCUPIED_ORIGIN_SFEN = "4k4/9/9/4b4/4S4/9/9/9/4K4 b p 1"
+# ため5五の桂を攻撃せず、「空きマスでない」条件だけを二歩・当たりから独立に検証できる。
+OCCUPIED_ORIGIN_SFEN = "4k4/9/9/4b4/4N4/9/9/9/4K4 b p 1"
+
+# §32.2 条件5: 打たれた歩をただで取り返せる打ち込み先は脅威としない。
+# 先手銀5五。銀自身が5四に利き、後手の利きはない。
+DROP_RECAPTURED_BY_TARGET_SFEN = "4k4/9/9/9/4S4/9/9/9/4K4 b p 1"
+# 先手桂5五・金4五。桂は5四に利かないが、金が5四に利き、後手の利きはない。
+DROP_RECAPTURED_BY_OTHER_SFEN = "4k4/9/9/9/4NG3/9/9/9/4K4 b p 1"
+# 先手銀5五、後手金5三。銀は5四に利くが、後手の金も5四に利く(叩きの歩)。
+DROP_CONTESTED_SFEN = "4k4/9/4g4/9/4S4/9/9/9/4K4 b p 1"
+# games/2026-10-03_195927.kif 45手目▲７九玉の局面(後手番、双方の持ち駒は歩1枚)。
+# １一香(１二に自身が利く)・２一桂(２二に３二金が利く)は先手の利きがなく取り返せる。
+# １四歩(１五に先手の１九香が利く)・２三歩(２四に先手の２六飛が利く)は脅威が残る。
+GAME_M45_SFEN = "ln3k1nl/3sgsg2/2ppppbp1/1r4p1p/pp7/7R1/PPPPPPP2/1BGS1GS2/LNK4NL w Pp 46"
 
 
 def test_attacked_pieces_detects_pawn_drop_risk_with_no_board_attackers():
@@ -364,6 +377,34 @@ def test_attacked_pieces_detects_pawn_drop_risk_with_no_board_attackers():
     assert entry["cheapest_attacker"] is None
     assert entry["hanging"]
     assert entry["pawn_drop_risk"]
+
+
+def test_attacked_pieces_pawn_drop_risk_false_when_target_recaptures():
+    board = cshogi.Board()
+    board.set_sfen(DROP_RECAPTURED_BY_TARGET_SFEN)
+    assert analysis.attacked_pieces(board, color=cshogi.BLACK) == []
+
+
+def test_attacked_pieces_pawn_drop_risk_false_when_other_piece_recaptures():
+    board = cshogi.Board()
+    board.set_sfen(DROP_RECAPTURED_BY_OTHER_SFEN)
+    assert analysis.attacked_pieces(board, color=cshogi.BLACK) == []
+
+
+def test_attacked_pieces_pawn_drop_risk_true_when_drop_square_contested():
+    board = cshogi.Board()
+    board.set_sfen(DROP_CONTESTED_SFEN)
+    (entry,) = analysis.attacked_pieces(board, color=cshogi.BLACK)
+    assert entry["square"] == "5五"
+    assert entry["attackers"] == 0
+    assert entry["pawn_drop_risk"]
+
+
+def test_attacked_pieces_pawn_drop_risk_game_m45_excludes_recapturable_drops():
+    board = cshogi.Board()
+    board.set_sfen(GAME_M45_SFEN)
+    risky = {e["square"] for e in analysis.attacked_pieces(board) if e["pawn_drop_risk"]}
+    assert risky == {"1四", "2三"}
 
 
 def test_attacked_pieces_pawn_drop_risk_blocked_by_nifu():
@@ -1906,3 +1947,70 @@ def test_simulate_line_reports_illegal_move():
     result = analysis.simulate_line(board, ["7g7f", "7f7e", "3c3d"])
     assert result["applied"] == ["7g7f"]
     assert result["illegal_move"] == {"index": 1, "usi": "7f7e"}
+
+
+# --- rank_moves(§31) ---------------------------------------------------------
+# games/2026-10-03_162757.kif(ピヨ丸Lv22戦、Claude後手)の局面。局後のやねうら王解析で
+# 敗着・緩手となった手番。
+RANK_MOVE86_SFEN = "ln3k1s1/3r1ss2/pg2p2s1/2p2+Bp1g/1p1p1n3/P1P6/1PSP1+r3/K1GG5/LN5+b1 w L2Pn6p 86"
+RANK_MOVE90_SFEN = "ln3k1s1/3r1s3/pg2pP1s1/2p2+Bp1g/1p1p1n3/P1P6/1PSP1+r3/K1GG5/LN5+b1 w LPnl6p 90"
+RANK_MOVE92_SFEN = "ln3k1s1/3r1+Pn2/pg2p2s1/2p2+Bp1g/1p1p1n3/P1P6/1PSP1+r3/K1GG5/LN5+b1 w SLPl6p 92"
+
+
+def _top_usis(result, n=3):
+    return [e["usi"] for e in result["top"][:n]]
+
+
+def test_rank_moves_move90_finds_engine_best_retreat():
+    # (a) △５一銀(やねうら王の最善)は深さ2で単独1位、深さ1でも上位3手に入る。
+    board = cshogi.Board(RANK_MOVE90_SFEN)
+    assert analysis.rank_moves(board, depth=2)["top"][0]["usi"] == "4b5a"
+    assert "4b5a" in _top_usis(analysis.rank_moves(board, depth=1))
+
+
+def test_rank_moves_move86_finds_attacking_move():
+    # (b) △５七桂成(やねうら王の読み筋の初手)が上位3手に入る。
+    board = cshogi.Board(RANK_MOVE86_SFEN)
+    assert "4e5g+" in _top_usis(analysis.rank_moves(board, depth=1))
+
+
+def test_rank_moves_move92_prefers_rook_recapture_over_king():
+    # (c) 合法手2つ(同玉/同飛)。玉の安全度を含む評価値で同飛が上になる。
+    board = cshogi.Board(RANK_MOVE92_SFEN)
+    result = analysis.rank_moves(board, depth=1)
+    assert result["legal_count"] == 2
+    assert result["top"][0]["usi"] == "6b4b"
+
+
+def test_rank_moves_separates_mating_move():
+    # (d) 詰ます手はmatesに入り、topには含まれない。
+    board = cshogi.Board(MATE_IN_1_SFEN)
+    result = analysis.rank_moves(board)
+    assert "G*5b" in [e["usi"] for e in result["mates"]]
+    assert "G*5b" not in [e["usi"] for e in result["top"]]
+
+
+def test_rank_moves_excludes_moves_allowing_mate():
+    # (e) 頓死する手(G*1e: 放置すると△G*5hで詰み)はtopから除外され件数に数えられる。
+    board = cshogi.Board(SUDDEN_DEATH_SFEN)
+    result = analysis.rank_moves(board, top_n=30)
+    assert result["allows_mate_count"] >= 1
+    assert "G*1e" not in [e["usi"] for e in result["top"]]
+
+
+def test_rank_moves_initial_position_all_tied():
+    # (f) 序盤は駒の損得・玉の危険度でほぼ差がつかない(既知の限界、§31.1)。
+    # 実測: 30手中29手が同点(6八玉のみ玉の安全度で-40)。
+    result = analysis.rank_moves(cshogi.Board(), top_n=10)
+    assert result["legal_count"] == 30
+    assert result["top_tied"] == 29
+    assert len(result["top"]) == 10
+    assert set(result["top"][0]) == {"usi", "kif", "score", "material_change", "check"}
+
+
+def test_rank_moves_does_not_mutate_board():
+    # (g)
+    board = cshogi.Board(RANK_MOVE86_SFEN)
+    before = board.sfen()
+    analysis.rank_moves(board)
+    assert board.sfen() == before

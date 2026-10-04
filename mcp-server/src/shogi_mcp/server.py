@@ -565,7 +565,8 @@ def analyze_position() -> dict:
     駒割り(material)・持ち駒(hands)・手番側から相手玉への詰み(mate_for_side_to_move)・
     手番側が放置した場合に相手から詰まされるか=詰めろ(mate_threat_against_side_to_move)・
     手番側の駒への当たり一覧(attacked_pieces。相手の利き数/味方の紐の数/浮き駒かどうか。
-    相手の持ち駒の歩による当たりを示すpawn_drop_riskも含む、§15.1)を含む。
+    相手の持ち駒の歩による当たりを示すpawn_drop_riskも含む、§15.1。打たれた歩を
+    ただで取り返せる打ち込み先は除外、§32.2)を含む。
     king_only_defense(§19.1)は、紐が1つ以上あり、かつその全てが自玉である場合に
     true。実際に取り返すと玉自身が危険になる特殊なケースで、hanging(紐なし)と同様に
     実質的な無防備として扱うべき(hangingとは排他)。
@@ -646,6 +647,7 @@ def verify_moves(
     own_supports。opponent_effects>0かつown_supports==0はタダ捨ての警告)・
     own_attacked_after(着手直後の自駒への当たり上位5件。§13.3のattacked_pieces形式。
     盤上の利きに加え、相手の持ち駒の歩による当たりも`pawn_drop_risk`で示す。§15.1。
+    打たれた歩をただで取り返せる打ち込み先は除外する、§32.2。
     king_only_defenseは紐が玉のみであることを示す、§19.1)・
     search_depth_completed(反復深化で完了した深さ。0なら信頼できる読みなし)・
     material_change(双方が材料点上の最善を尽くした場合の材料点差の変化。負なら駒損。
@@ -733,6 +735,39 @@ def verify_moves(
         board, moves[:10], depth=depth, node_limit=node_limit, mate_ply=mate_ply
     )
     return {"ok": True, "results": results}
+
+
+@mcp.tool()
+def rank_moves(top_n: int = 10, depth: int = 1) -> dict:
+    """全合法手を浅い探索で評価し、上位top_n件を要約して返す(盤面は変更しない)。
+
+    Claude思考モード・CSA対局モード用の候補手スクリーニング(§31)。USIエンジンは使わない。
+    検証にかける候補の漏れを防ぐための道具であり、指す手を決める道具ではない
+    (最終判断はverify_movesの結果と自分の構想で行う)。
+    戻り値: legal_count(合法手数)・depth・mates(相手玉を詰ます手。あれば最優先で
+    verify_movesで確認する)・allows_mate_count(頓死するため除外した手数)・
+    top(score降順の上位。各要素はusi/kif/score/material_change/check)・
+    top_tied(1位と同じscoreの手の数)。
+    score: 手番側視点の評価値(材料点+玉の安全度、§13.5)。material_change:
+    読み筋適用後の材料点差の変化(verify_movesと同じ)。探索が完了しなかった手は
+    両方null(末尾)。top_tiedが4以上(序盤など多数の手が横並び)のとき、topの
+    並びは合法手の生成順にすぎず意味を持たない。
+    top_n: [1, 30]にクランプ。depth: 探索深さ、[1, 2]にクランプ
+    (実測: 深さ1で0.3〜0.6秒、深さ2で約7〜9秒・合法手が多い局面では最悪約20秒強、
+    深さ3は30秒超のため不可、§31.1)。深さ2は終盤の勝負所でのみ指定すること。
+    """
+    with _session_lock:
+        session = _current_session()
+        if session is None:
+            return {"ok": False, "error": "no_active_game"}
+        board = cshogi.Board(session.game.sfen())
+        history = session.game.board.history
+        prev_move = history[-1] if history else None
+    top_n = max(1, min(30, top_n))
+    depth = max(1, min(2, depth))
+    result = analysis.rank_moves(board, top_n=top_n, depth=depth, prev_move=prev_move)
+    result["ok"] = True
+    return result
 
 
 @mcp.tool()

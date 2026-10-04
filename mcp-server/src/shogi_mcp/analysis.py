@@ -266,6 +266,9 @@ def _pawn_drop_risk(pieces: list[int], opp_color: int, opp_pawn_count: int, sq: 
 
     sqから見て相手が前進する方向に1段の打ち込み先が、盤内・空きマス・
     二歩でなく・opp_colorにとっての最終段でもないことを確認する。
+    打ち込み先に自分の駒の利きがあり相手の駒の利きがない(打たれた歩をただで
+    取り返せる)場合は脅威としない(§32.2)。静的な利き数による判定で、
+    ピン等の手順は考慮しない。
     """
     if opp_pawn_count <= 0:
         return False
@@ -282,6 +285,9 @@ def _pawn_drop_risk(pieces: list[int], opp_color: int, opp_pawn_count: int, sq: 
     illegal_rank = 0 if opp_color == cshogi.BLACK else 8
     if origin_rank == illegal_rank:
         return False
+    own_color = cshogi.WHITE if opp_color == cshogi.BLACK else cshogi.BLACK
+    if attackers(pieces, own_color, origin_sq) and not attackers(pieces, opp_color, origin_sq):
+        return False
     return True
 
 
@@ -290,7 +296,8 @@ def attacked_pieces(board: cshogi.Board, color: Optional[int] = None) -> list[di
 
     colorを省略すると従来どおり手番側。ピンや取り合いの手順は考慮しない静的な
     利き数。玉への当たり=王手はin_checkで報告する。盤上の利きに加え、相手の
-    持ち駒の歩による当たり(pawn_drop_risk)も判定する(§15.1)。
+    持ち駒の歩による当たり(pawn_drop_risk)も判定する(§15.1。打たれた歩をただで
+    取り返せる打ち込み先は除外、§32.2)。
 
     紐(defenders)が1つ以上あり、かつその全てが自玉である場合は
     king_only_defense: trueを返す(§19.1)。玉による「防御」は実際に取り返すと
@@ -925,6 +932,78 @@ def verify_moves(
                 entry["mate_threat_after_pv"] = None
         results.append(entry)
     return results
+
+
+def rank_moves(
+    board: cshogi.Board,
+    top_n: int = 10,
+    depth: int = 1,
+    node_limit: int = DEFAULT_NODE_LIMIT,
+    mate_ply: int = DEFAULT_MATE_PLY,
+    prev_move: Optional[int] = None,
+) -> dict:
+    """全合法手の事前スクリーニング(§31.2)。盤面は変更しない。
+
+    全合法手を浅い探索(材料点+玉の安全度、§13.5)で評価し、手番側視点の
+    評価値(score)の降順に上位top_n件を返す。詰ます手はmatesに分け、
+    頓死する手(着手後に相手からmate_ply手以内の詰み)は除外して件数のみ
+    allows_mate_countに数える。material_changeはverify_movesと同じく
+    読み筋(PV)適用後の実材料点差。打ち切りで1回も探索が完了しなかった手は
+    score=Noneとして末尾に置く。top_tiedは1位と同じscoreの手の数。
+    prev_moveは直前の指し手(KIF表記の「同」判定用。Noneなら考慮しない)。
+    """
+    copy = _copy_board(board)
+    mover_is_black = copy.turn == cshogi.BLACK
+    base_black, base_white = material(copy)
+    mates: list[dict] = []
+    ranked: list[dict] = []
+    allows_mate_count = 0
+    legal = list(copy.legal_moves)
+    for move in legal:
+        info = {"usi": cshogi.move_to_usi(move), "kif": KIF.move_to_kif(move, prev_move)}
+        copy.push(move)
+        try:
+            if copy.is_game_over():
+                mates.append(info)
+                continue
+            if find_mate(copy, mate_ply) is not None:
+                allows_mate_count += 1
+                continue
+            info["check"] = copy.is_check()
+            searcher = _Searcher(copy, node_limit)
+            score, pv, completed_depth = _iterative_deepen(searcher, depth)
+            if completed_depth == 0 or score is None:
+                info["score"] = None
+                info["material_change"] = None
+            else:
+                for m in pv:
+                    copy.push(m)
+                end_black, end_white = material(copy)
+                for _ in pv:
+                    copy.pop()
+                info["score"] = -score
+                if mover_is_black:
+                    info["material_change"] = (end_black - end_white) - (base_black - base_white)
+                else:
+                    info["material_change"] = (end_white - end_black) - (base_white - base_black)
+            ranked.append(info)
+        finally:
+            copy.pop()
+
+    ranked.sort(key=lambda e: e["score"] if e["score"] is not None else -MATE_SCORE * 10, reverse=True)
+    top_score = ranked[0]["score"] if ranked else None
+    top_tied = sum(1 for e in ranked if e["score"] == top_score) if top_score is not None else 0
+    return {
+        "legal_count": len(legal),
+        "depth": depth,
+        "mates": mates,
+        "allows_mate_count": allows_mate_count,
+        "top": [
+            {k: e[k] for k in ("usi", "kif", "score", "material_change", "check")}
+            for e in ranked[:top_n]
+        ],
+        "top_tied": top_tied,
+    }
 
 
 def _unpromoted(piece_type: int) -> int:
