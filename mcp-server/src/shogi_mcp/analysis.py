@@ -612,20 +612,52 @@ def find_mate_threat(board: cshogi.Board, max_ply: int = DEFAULT_MATE_PLY) -> Op
         board.pop_pass()
 
 
-class _Searcher:
-    """材料点+玉の安全度を評価とするネガマックス+アルファベータ+取る手の静止探索。"""
+class _SearchTables:
+    """探索をまたいで共有できる表(評価キャッシュ・置換表・ヒストリ。§35.1)。
 
-    def __init__(self, board: cshogi.Board, node_limit: int):
+    いずれも局面(zobrist_hash)や指し手だけで決まり、探索ごとのノード予算に依存しない。
+    rank_moves のように同じ根の候補手を順に探索する場合に共有すると、候補手間の合流局面を
+    再利用できる。打ち切られた探索の結果は置換表に書き込まない。
+    """
+
+    def __init__(self) -> None:
+        self.eval_cache: dict[int, int] = {}
+        # hash -> (depth, flag, score, best_move)。flagはTT_EXACT/TT_LOWER/TT_UPPER。
+        self.tt: dict[int, tuple[int, int, int, int]] = {}
+        self.history: dict[int, int] = {}
+
+
+TT_EXACT, TT_LOWER, TT_UPPER = 0, 1, 2
+_NULL_MOVE_MIN_DEPTH = 3
+_LMR_MIN_DEPTH = 3
+_LMR_FULL_MOVES = 3  # この手数までは短縮せずに読む
+_FUTILITY_MARGIN = 300  # 残り深さ1手あたりの余裕(材料点スケール)
+_DELTA_MARGIN = 300  # 静止探索で、取る駒の価値にこれを足しても alpha に届かない取りは読まない
+
+
+class _Searcher:
+    """材料点+玉の安全度を評価とするネガマックス+アルファベータ+取る手の静止探索(§14, §35)。
+
+    置換表・手順序(置換表手・MVV-LVA・キラー・ヒストリ)・PVS・null move・LMR・
+    futility・王手延長・静止探索の枝刈りを備える。枝刈りにより、スコアは全幅探索の値の
+    近似になる(§35.2)。返す形式(score, pv)・nodes・truncatedは従来どおり。
+    """
+
+    def __init__(self, board: cshogi.Board, node_limit: int, tables: Optional[_SearchTables] = None):
         self.board = board
         self.node_limit = node_limit
         self.nodes = 0
         self.truncated = False
-        # 評価値キャッシュ(§33.2(a)): 探索木内で同一局面は手順前後で繰り返し現れる。
-        self._eval_cache: dict[tuple[int, int], int] = {}
+        tables = tables if tables is not None else _SearchTables()
+        self._eval_cache = tables.eval_cache
+        self._tt = tables.tt
+        self._history = tables.history
+        self._killers: dict[int, list[int]] = {}
+        self._root_depth = 0
 
     def _eval(self) -> int:
         board = self.board
-        key = (board.zobrist_hash(), board.turn)
+        key = (board.zobrist_hash() << 1) | board.turn
         score = self._eval_cache.get(key)
         if score is None:
             score = self._eval_cache[key] = _eval_for_side_to_move(board)
@@ -639,18 +671,52 @@ class _Searcher:
         return False
 
     @staticmethod
-    def _order_moves(moves: list[int]) -> list[int]:
-        """取る手を「取る駒の価値が高い順・取りに行く駒が安い順」(MVV-LVA)で先頭に置く。"""
+    def _capture_key(m: int) -> int:
+        """取る手の並べ替え値(MVV-LVA: 取る駒の価値が高く、取りに行く駒が安いほど大きい)。"""
+        victim = PIECE_VALUES[cshogi.move_cap(m) % _WHITE_OFFSET]
+        attacker = PIECE_VALUES[cshogi.move_from_piece_type(m)]
+        return victim * 16 - attacker
 
-        def key(m: int) -> tuple[int, int]:
-            cap = cshogi.move_cap(m)
-            if cap == 0:
-                return (1, 0)
-            victim = PIECE_VALUES[cap % _WHITE_OFFSET]
-            attacker = PIECE_VALUES[cshogi.move_from_piece_type(m)]
-            return (0, -(victim * 16 - attacker))
+    @classmethod
+    def _order_moves(cls, moves: list[int]) -> list[int]:
+        """取る手を MVV-LVA で先頭に置く(静止探索用)。"""
+        return sorted(
+            moves,
+            key=lambda m: (0, -cls._capture_key(m)) if cshogi.move_cap(m) else (1, 0),
+        )
 
-        return sorted(moves, key=key)
+    def _order_search_moves(self, moves: list[int], tt_move: int, ply: int) -> list[int]:
+        """置換表手 > 取る手(MVV-LVA) > キラー > 成り > ヒストリ の順に並べる。"""
+        killers = self._killers.get(ply, ())
+        history = self._history
+        turn = self.board.turn
+
+        def score(m: int) -> int:
+            if m == tt_move:
+                return 1 << 40
+            if cshogi.move_cap(m):
+                return (1 << 30) + self._capture_key(m)
+            if m in killers:
+                return 1 << 29
+            bonus = (1 << 20) if cshogi.move_is_promotion(m) else 0
+            return bonus + history.get((turn, m), 0)
+
+        return sorted(moves, key=score, reverse=True)
+
+    def _loses_material_by_capture(self, m: int) -> bool:
+        """取った先で相手に取り返され、こちらの追加の利きでは取り返せない取りか(静的な近似)。
+
+        取りに行く駒自身以外にこちらの利きがあれば(取り返しの取り返しがあれば)損とはみなさない。
+        ピン・取る駒の背後の利きは考慮しない。
+        """
+        board = self.board
+        pieces = board.pieces
+        to = cshogi.move_to(m)
+        mover = board.turn
+        opponent = cshogi.WHITE if mover == cshogi.BLACK else cshogi.BLACK
+        if not attackers(pieces, opponent, to):
+            return False
+        return len(attackers(pieces, mover, to)) <= 1
 
     def quiesce(self, alpha: int, beta: int) -> tuple[int, list[int]]:
         if self._over_budget():
@@ -662,6 +728,7 @@ class _Searcher:
             if not moves:
                 return -MATE_SCORE, []
             best_score = -MATE_SCORE
+            stand_pat = None
         else:
             stand_pat = self._eval()
             if stand_pat >= beta:
@@ -672,6 +739,17 @@ class _Searcher:
 
         best_pv: list[int] = []
         for m in self._order_moves(moves):
+            if self.truncated:
+                break
+            if stand_pat is not None and not cshogi.move_is_promotion(m):
+                victim = PIECE_VALUES[cshogi.move_cap(m) % _WHITE_OFFSET]
+                # delta pruning: 取っても alpha に届かない取りは読まない。
+                if stand_pat + victim + _DELTA_MARGIN < alpha:
+                    continue
+                # 損な取り: 取る駒の方が高く、取り返されて取り返しの手段もない取りは読まない。
+                attacker = PIECE_VALUES[cshogi.move_from_piece_type(m)]
+                if attacker > victim and self._loses_material_by_capture(m):
+                    continue
             self.board.push(m)
             score, pv = self.quiesce(-beta, -alpha)
             score = -score
@@ -685,28 +763,146 @@ class _Searcher:
         return best_score, best_pv
 
     def search(self, depth: int, alpha: int, beta: int) -> tuple[int, list[int]]:
+        self._root_depth = depth
+        return self._search(depth, alpha, beta, 0, True)
+
+    def _has_non_pawn_material(self) -> bool:
+        """null moveを許す局面か(手番側に歩以外の駒があるか。玉と歩だけの終盤を除く)。"""
+        board = self.board
+        hand = board.pieces_in_hand[board.turn]
+        if any(hand[1:]):  # 歩以外の持ち駒
+            return True
+        own = range(1, 16) if board.turn == cshogi.BLACK else range(17, 32)
+        for code in board.pieces:
+            if code in own and code % _WHITE_OFFSET not in (cshogi.PAWN, cshogi.KING):
+                return True
+        return False
+
+    def _search(self, depth: int, alpha: int, beta: int, ply: int, allow_null: bool) -> tuple[int, list[int]]:
         if self._over_budget():
             return self._eval(), []
-        moves = list(self.board.legal_moves)
-        if not moves:
-            return -MATE_SCORE, []  # 手番側の詰み
+        board = self.board
+        in_check = board.is_check()
+        # 王手延長(無限延長を避けるため、根の深さの2倍までの手数に限る)。
+        if in_check and ply < self._root_depth * 2:
+            depth += 1
         if depth <= 0:
             self.nodes -= 1  # quiesce側で数え直す
             return self.quiesce(alpha, beta)
 
+        is_pv = beta - alpha > 1
+        key = board.zobrist_hash()
+        tt_move = 0
+        entry = self._tt.get(key)
+        if entry is not None:
+            tt_depth, flag, tt_score, tt_move = entry
+            # PVノードでは読み筋を保つため置換表のスコアでは打ち切らない(手順序にだけ使う)。
+            if not is_pv and tt_depth >= depth:
+                if flag == TT_EXACT:
+                    return tt_score, []
+                if flag == TT_LOWER and tt_score >= beta:
+                    return tt_score, []
+                if flag == TT_UPPER and tt_score <= alpha:
+                    return tt_score, []
+
+        moves = list(board.legal_moves)
+        if not moves:
+            return -MATE_SCORE, []  # 手番側の詰み
+
+        static_eval = None
+        if not in_check and not is_pv:
+            static_eval = self._eval()
+            if (
+                allow_null
+                and depth >= _NULL_MOVE_MIN_DEPTH
+                and static_eval >= beta
+                and self._has_non_pawn_material()
+            ):
+                reduction = 3 if depth >= 6 else 2
+                board.push_pass()
+                score, _ = self._search(depth - 1 - reduction, -beta, -beta + 1, ply + 1, False)
+                board.pop_pass()
+                score = -score
+                if score >= beta and not self.truncated:
+                    return (beta if score >= MATE_SCORE - 1000 else score), []
+
+        alpha_orig = alpha
         best_score = -MATE_SCORE - 1
         best_pv: list[int] = []
-        for m in self._order_moves(moves):
-            self.board.push(m)
-            score, pv = self.search(depth - 1, -beta, -alpha)
-            score = -score
-            self.board.pop()
+        best_move = 0
+        searched = 0
+        for m in self._order_search_moves(moves, tt_move, ply):
+            if self.truncated:
+                break  # 打ち切り後の結果は使われない(§14.4)ので、残りの手は読まない
+            is_quiet = not cshogi.move_cap(m) and not cshogi.move_is_promotion(m)
+            board.push(m)
+            gives_check = board.is_check()
+
+            # futility: 浅い残り深さで、静的評価が alpha に遠く及ばない静かな手は読まない。
+            if (
+                static_eval is not None
+                and is_quiet
+                and not gives_check
+                and depth <= 2
+                and searched > 0
+                and static_eval + _FUTILITY_MARGIN * depth <= alpha
+            ):
+                board.pop()
+                continue
+
+            if searched == 0:
+                score, pv = self._search(depth - 1, -beta, -alpha, ply + 1, True)
+                score = -score
+            else:
+                reduction = 0
+                if (
+                    is_quiet
+                    and not in_check
+                    and not gives_check
+                    and depth >= _LMR_MIN_DEPTH
+                    and searched >= _LMR_FULL_MOVES
+                ):
+                    reduction = 1
+                score, pv = self._search(depth - 1 - reduction, -alpha - 1, -alpha, ply + 1, True)
+                score = -score
+                if score > alpha and reduction:
+                    score, pv = self._search(depth - 1, -alpha - 1, -alpha, ply + 1, True)
+                    score = -score
+                if alpha < score < beta:
+                    score, pv = self._search(depth - 1, -beta, -alpha, ply + 1, True)
+                    score = -score
+            board.pop()
+            searched += 1
+
             if score > best_score:
                 best_score = score
+                best_move = m
                 best_pv = [m] + pv
-            alpha = max(alpha, score)
+            if score > alpha:
+                alpha = score
             if alpha >= beta:
+                if is_quiet:
+                    killers = self._killers.setdefault(ply, [])
+                    if m not in killers:
+                        killers.insert(0, m)
+                        del killers[2:]
+                    hist_key = (board.turn, m)
+                    self._history[hist_key] = self._history.get(hist_key, 0) + depth * depth
                 break
+
+        if searched == 0:
+            # 全ての手が枝刈りされた(futilityのみ。searched>0条件により通常は起きない)。
+            return static_eval if static_eval is not None else -MATE_SCORE, []
+        if not self.truncated:
+            if best_score <= alpha_orig:
+                flag = TT_UPPER
+            elif best_score >= beta:
+                flag = TT_LOWER
+            else:
+                flag = TT_EXACT
+            old = self._tt.get(key)
+            if old is None or old[0] <= depth:
+                self._tt[key] = (depth, flag, best_score, best_move)
         return best_score, best_pv
 
 
@@ -1060,6 +1256,7 @@ def rank_moves(
     mates: list[dict] = []
     ranked: list[dict] = []
     allows_mate_count = 0
+    tables = _SearchTables()  # 候補手間で合流する局面の探索結果を共有する(§35.1)
     legal = list(copy.legal_moves)
     for move in legal:
         info = {"usi": cshogi.move_to_usi(move), "kif": KIF.move_to_kif(move, prev_move)}
@@ -1072,7 +1269,7 @@ def rank_moves(
                 allows_mate_count += 1
                 continue
             info["check"] = copy.is_check()
-            searcher = _Searcher(copy, node_limit)
+            searcher = _Searcher(copy, node_limit, tables)
             score, pv, completed_depth = _iterative_deepen(searcher, depth)
             if completed_depth == 0 or score is None:
                 info["score"] = None
