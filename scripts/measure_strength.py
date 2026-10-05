@@ -127,6 +127,9 @@ def main() -> int:
     ap.add_argument("--referee-ms", type=int, default=500, help="やねうら王の秒読み(ミリ秒)")
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--cache", default=str(Path(__file__).parent / ".strength_cache.json"))
+    ap.add_argument("--node-limit", type=int, default=analysis.DEFAULT_NODE_LIMIT,
+                    help="rank_moves の候補手ごとのノード上限(深さ4以上を測るときに引き上げる)")
+    ap.add_argument("--stride", type=int, default=1, help="N局面おきに抽出する(深い探索を短時間で測るため)")
     ap.add_argument("--max-positions", type=int, default=0, help="局面数の上限(0=全て。動作確認用)")
     ap.add_argument("--out", help="結果の行データをJSONで保存する")
     args = ap.parse_args()
@@ -139,6 +142,7 @@ def main() -> int:
     for path in sorted(glob.glob(args.samples)):
         for ply, sfen, move in claude_positions(path):
             positions.append((Path(path).name, ply, sfen, move))
+    positions = positions[:: args.stride]
     if args.max_positions:
         positions = positions[: args.max_positions]
     print(f"positions: {len(positions)}  eval impl: {'native' if analysis._eval_native else 'python'}")
@@ -152,7 +156,7 @@ def main() -> int:
                 board = cshogi.Board(sfen)
                 best = referee.evaluate(sfen)
                 t0 = time.perf_counter()
-                ranked = analysis.rank_moves(board, top_n=3, depth=depth)
+                ranked = analysis.rank_moves(board, top_n=3, depth=depth, node_limit=args.node_limit)
                 seconds = time.perf_counter() - t0
                 candidates = [e["usi"] for e in ranked["mates"]] + [e["usi"] for e in ranked["top"]]
                 if not candidates:
