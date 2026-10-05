@@ -8,6 +8,8 @@ USIエンジンは使わず、詰み探索(cshogi組み込み)・自前の利き
 
 from __future__ import annotations
 
+from itertools import compress
+from operator import mul
 from typing import Optional
 
 import cshogi
@@ -179,21 +181,27 @@ def _copy_board(board: cshogi.Board) -> cshogi.Board:
     return cshogi.Board(board.sfen())
 
 
+# 駒コード(先後込み)→材料点の表。盤上の集計をC側のsum(map(...))で行う(§33.2)。
+_BLACK_VALUE = tuple(
+    PIECE_VALUES.get(c % _WHITE_OFFSET, 0) if 0 < c < _WHITE_OFFSET else 0 for c in range(32)
+)
+_WHITE_VALUE = tuple(
+    PIECE_VALUES.get(c % _WHITE_OFFSET, 0) if c > _WHITE_OFFSET else 0 for c in range(32)
+)
+
+
+def _material_of(pieces: list[int], hands: tuple) -> tuple[int, int]:
+    hand_black, hand_white = hands
+    black = sum(map(_BLACK_VALUE.__getitem__, pieces))
+    white = sum(map(_WHITE_VALUE.__getitem__, pieces))
+    black += sum(map(mul, hand_black, HAND_PIECE_VALUES))
+    white += sum(map(mul, hand_white, HAND_PIECE_VALUES))
+    return black, white
+
+
 def material(board: cshogi.Board) -> tuple[int, int]:
     """盤上+持ち駒の材料点を(先手, 後手)で返す。"""
-    black = white = 0
-    for code in board.pieces:
-        if code == 0:
-            continue
-        value = PIECE_VALUES[code % _WHITE_OFFSET]
-        if code < _WHITE_OFFSET:
-            black += value
-        else:
-            white += value
-    hand_black, hand_white = board.pieces_in_hand
-    black += sum(n * v for n, v in zip(hand_black, HAND_PIECE_VALUES))
-    white += sum(n * v for n, v in zip(hand_white, HAND_PIECE_VALUES))
-    return black, white
+    return _material_of(board.pieces, board.pieces_in_hand)
 
 
 # 玉の隣接8マス(前計算)
@@ -213,6 +221,86 @@ def _king_danger(pieces: list[int], attacker_is_white: bool, king_sq: int) -> in
     for zone_sq in _KING_ZONES[king_sq]:
         danger += _count_attackers(pieces, attacker_is_white, zone_sq)
     return danger
+
+
+def _build_attacker_tables():
+    """駒コード・マス → 1マス利きの到達先集合 / 走り利きの経路(§33.2)。
+
+    `_count_attackers`(玉の周囲マスから逆向きに利き元を探す)の逆で、駒の側から
+    利き先を引く。前計算は`_STEP_SETS`/`_RAY_SETS`と同じ判定表から作るため、
+    利きの定義は`attackers()`と一致する。
+    """
+    step_targets = [None] * 32
+    ray_paths = [None] * 32
+    offsets = [(df, dr) for df in range(-2, 3) for dr in range(-2, 3)]
+    for code in range(1, 32):
+        if _STEP_SETS[code]:
+            per_sq = []
+            for sq in range(81):
+                tf, tr = divmod(sq, 9)
+                per_sq.append(frozenset(
+                    (tf + df) * 9 + (tr + dr)
+                    for df, dr in offsets
+                    if _vec(df, dr) in _STEP_SETS[code] and 0 <= tf + df <= 8 and 0 <= tr + dr <= 8
+                ))
+            step_targets[code] = tuple(per_sq)
+        if _RAY_SETS[code]:
+            per_sq = []
+            for sq in range(81):
+                tf, tr = divmod(sq, 9)
+                paths = []
+                for df, dr in _RAY_DIRECTIONS:
+                    if _vec(df, dr) not in _RAY_SETS[code]:
+                        continue
+                    path = []
+                    f, r = tf + df, tr + dr
+                    while 0 <= f <= 8 and 0 <= r <= 8:
+                        path.append(f * 9 + r)
+                        f += df
+                        r += dr
+                    if path:
+                        paths.append((tuple(path), frozenset(path)))
+                per_sq.append(tuple(paths))
+            ray_paths[code] = tuple(per_sq)
+    return tuple(step_targets), tuple(ray_paths)
+
+
+_STEP_TARGETS, _RAY_TARGETS = _build_attacker_tables()
+_KING_ZONE_SETS = tuple(frozenset(z) for z in _KING_ZONES)
+_SQUARES = range(81)
+
+
+def _both_king_dangers(pieces: list[int], black_king: int, white_king: int) -> tuple[int, int]:
+    """(先手の駒による後手玉の周囲への利き数, 後手の駒による先手玉の周囲への利き数)。
+
+    `_king_danger(pieces, False, white_king)`と`_king_danger(pieces, True, black_king)`
+    の組と常に一致する(§33.5(a)で検証)。盤上の駒を1回走査して両玉分を同時に数える。
+    """
+    zone_of_white_king = _KING_ZONE_SETS[white_king]
+    zone_of_black_king = _KING_ZONE_SETS[black_king]
+    by_black = by_white = 0
+    for sq in compress(_SQUARES, pieces):
+        code = pieces[sq]
+        zone = zone_of_white_king if code < _WHITE_OFFSET else zone_of_black_king
+        n = 0
+        targets = _STEP_TARGETS[code]
+        if targets is not None:
+            n = len(targets[sq] & zone)
+        paths = _RAY_TARGETS[code]
+        if paths is not None:
+            for path, path_set in paths[sq]:
+                if path_set.isdisjoint(zone):
+                    continue
+                for target in path:
+                    if target in zone:
+                        n += 1
+                    if pieces[target]:
+                        break
+        if code < _WHITE_OFFSET:
+            by_black += n
+        else:
+            by_white += n
+    return by_black, by_white
 
 
 _SHELTER_PIECE_TYPES = frozenset({
@@ -240,24 +328,11 @@ def _king_shelter_count(pieces: list[int], color: int, king_sq: int) -> int:
 def _eval_for_side_to_move(board: cshogi.Board) -> int:
     """材料点差 + 玉の安全度(§13.5)。手番側視点。"""
     pieces = board.pieces
-    black = white = 0
-    for code in pieces:
-        if code == 0:
-            continue
-        value = PIECE_VALUES[code % _WHITE_OFFSET]
-        if code < _WHITE_OFFSET:
-            black += value
-        else:
-            white += value
-    hand_black, hand_white = board.pieces_in_hand
-    black += sum(n * v for n, v in zip(hand_black, HAND_PIECE_VALUES))
-    white += sum(n * v for n, v in zip(hand_white, HAND_PIECE_VALUES))
-
-    safety = KING_SAFETY_WEIGHT * (
-        _king_danger(pieces, False, board.king_square(cshogi.WHITE))
-        - _king_danger(pieces, True, board.king_square(cshogi.BLACK))
+    black, white = _material_of(pieces, board.pieces_in_hand)
+    danger_to_white, danger_to_black = _both_king_dangers(
+        pieces, board.king_square(cshogi.BLACK), board.king_square(cshogi.WHITE)
     )
-    score = (black - white) + safety
+    score = (black - white) + KING_SAFETY_WEIGHT * (danger_to_white - danger_to_black)
     return score if board.turn == cshogi.BLACK else -score
 
 
@@ -528,6 +603,16 @@ class _Searcher:
         self.node_limit = node_limit
         self.nodes = 0
         self.truncated = False
+        # 評価値キャッシュ(§33.2(a)): 探索木内で同一局面は手順前後で繰り返し現れる。
+        self._eval_cache: dict[tuple[int, int], int] = {}
+
+    def _eval(self) -> int:
+        board = self.board
+        key = (board.zobrist_hash(), board.turn)
+        score = self._eval_cache.get(key)
+        if score is None:
+            score = self._eval_cache[key] = _eval_for_side_to_move(board)
+        return score
 
     def _over_budget(self) -> bool:
         self.nodes += 1
@@ -552,7 +637,7 @@ class _Searcher:
 
     def quiesce(self, alpha: int, beta: int) -> tuple[int, list[int]]:
         if self._over_budget():
-            return _eval_for_side_to_move(self.board), []
+            return self._eval(), []
 
         if self.board.is_check():
             # 王手中はパス(stand pat)できない。全ての受けを読む。
@@ -561,7 +646,7 @@ class _Searcher:
                 return -MATE_SCORE, []
             best_score = -MATE_SCORE
         else:
-            stand_pat = _eval_for_side_to_move(self.board)
+            stand_pat = self._eval()
             if stand_pat >= beta:
                 return stand_pat, []
             alpha = max(alpha, stand_pat)
@@ -584,7 +669,7 @@ class _Searcher:
 
     def search(self, depth: int, alpha: int, beta: int) -> tuple[int, list[int]]:
         if self._over_budget():
-            return _eval_for_side_to_move(self.board), []
+            return self._eval(), []
         moves = list(self.board.legal_moves)
         if not moves:
             return -MATE_SCORE, []  # 手番側の詰み
