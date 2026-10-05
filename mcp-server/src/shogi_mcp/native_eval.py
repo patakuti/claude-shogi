@@ -1,7 +1,6 @@
-"""評価関数のネイティブ実装(任意)のローダー(02_design.md §34)。
+"""評価関数のネイティブ実装(任意)のバインディング(02_design.md §34)。
 
-`scripts/build_native.sh`が生成する共有ライブラリを`ctypes`で読み込む。
-ライブラリがない・読めない・`SHOGI_MCP_NATIVE=0`の場合は`None`を返し、
+共有ライブラリは`native_lib`が読み込む。ライブラリが使えない場合は`None`を返し、
 呼び出し側(analysis.py)はPython実装を使う(挙動は変わらず速度のみ異なる)。
 """
 
@@ -9,15 +8,14 @@ from __future__ import annotations
 
 import ctypes
 import logging
-import os
-from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 import cshogi
 
+from . import native_lib
+
 logger = logging.getLogger(__name__)
 
-LIB_PATH = Path(__file__).parent / "_native" / "libshogi_eval.so"
 _NCODE = 32
 _NSQ = 81
 _MAX_STEP = 8
@@ -63,18 +61,10 @@ def load(
 
     玉の座標が範囲外の局面ではfallback(Python実装)に委ねる。
     """
-    if os.environ.get("SHOGI_MCP_NATIVE") == "0":
-        logger.info("native eval disabled by SHOGI_MCP_NATIVE=0; using Python implementation")
-        return None
-    if not LIB_PATH.exists():
-        logger.warning(
-            "native eval not built (%s); using the slower Python implementation "
-            "(run scripts/build_native.sh to enable it)",
-            LIB_PATH,
-        )
+    lib = native_lib.load_library()
+    if lib is None:
         return None
     try:
-        lib = ctypes.CDLL(str(LIB_PATH))
         lib.shogi_init.argtypes = [ctypes.c_void_p] * 6
         lib.shogi_init.restype = None
         lib.shogi_eval_black.argtypes = [
@@ -107,5 +97,5 @@ def load(
         )
         return score if board.turn == black_color else -score
 
-    logger.info("native eval loaded: %s", LIB_PATH)
+    logger.info("native eval loaded")
     return evaluate

@@ -148,7 +148,7 @@ scripts/setup_engine.sh
 
 ### 評価関数のネイティブ実装(任意)
 
-浅い探索(`rank_moves`・`verify_moves`の材料点+玉の安全度の評価)をCで高速化する任意の
+浅い探索(`rank_moves`・`verify_moves`の材料点+玉の安全度の評価)などをCで高速化する任意の
 ビルド。未実行でもPython実装で同じ結果が出る(速度のみ異なる)。gccが必要でLinux専用
 (他OSは未検証)。
 
@@ -156,7 +156,9 @@ scripts/setup_engine.sh
 scripts/build_native.sh
 ```
 
-`mcp-server/src/shogi_mcp/_native/libshogi_eval.so`が生成される(Git管理外)。
+`mcp-server/src/shogi_mcp/_native/libshogi_native.so`が生成される(Git管理外)。評価関数のほか、
+ネイティブの盤面・合法手生成(`mcp-server/native/shogi_core.c`。cshogiと全合法手が一致することを
+テストで検証済み。今後の探索のネイティブ化の土台で、現時点では対局には使われない)を含む。
 ビルドしていない場合、MCPサーバーはstderrに警告を1行出してPython実装を使う。
 `SHOGI_MCP_NATIVE=0`で明示的に無効化もできる。評価1回が約12µsから約2.5µsになり、
 `rank_moves`の深さ2(実戦30手目の局面)は約2.2秒から約1.0秒になった。
