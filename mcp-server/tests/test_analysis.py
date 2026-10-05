@@ -2014,3 +2014,95 @@ def test_rank_moves_does_not_mutate_board():
     before = board.sfen()
     analysis.rank_moves(board)
     assert board.sfen() == before
+
+
+# --- 評価関数の高速化(§33)の同値性 -------------------------------------------
+
+
+def _reference_eval(board: cshogi.Board) -> int:
+    """高速化前の評価関数(§13.5)。高速化後の実装との同値性検証用の参照実装。"""
+    pieces = board.pieces
+    black = white = 0
+    for code in pieces:
+        if code == 0:
+            continue
+        value = analysis.PIECE_VALUES[code % analysis._WHITE_OFFSET]
+        if code < analysis._WHITE_OFFSET:
+            black += value
+        else:
+            white += value
+    hand_black, hand_white = board.pieces_in_hand
+    black += sum(n * v for n, v in zip(hand_black, analysis.HAND_PIECE_VALUES))
+    white += sum(n * v for n, v in zip(hand_white, analysis.HAND_PIECE_VALUES))
+    safety = analysis.KING_SAFETY_WEIGHT * (
+        analysis._king_danger(pieces, False, board.king_square(cshogi.WHITE))
+        - analysis._king_danger(pieces, True, board.king_square(cshogi.BLACK))
+    )
+    score = (black - white) + safety
+    return score if board.turn == cshogi.BLACK else -score
+
+
+def _random_positions(seed: int, games: int = 30, plies: int = 160):
+    """ランダム着手で現れる局面(持ち駒・成駒・王手を含む)を列挙する。"""
+    rng = random.Random(seed)
+    for _ in range(games):
+        board = cshogi.Board()
+        for _ in range(plies):
+            moves = list(board.legal_moves)
+            if not moves or board.is_game_over():
+                break
+            board.push(rng.choice(moves))
+            yield board
+
+
+def test_fast_eval_matches_reference_on_random_positions():
+    # (a) 評価値・玉周辺の利き数が参照実装と完全一致する。
+    checked = 0
+    for board in _random_positions(seed=1):
+        assert analysis._eval_for_side_to_move(board) == _reference_eval(board)
+        black_king = board.king_square(cshogi.BLACK)
+        white_king = board.king_square(cshogi.WHITE)
+        assert analysis._both_king_dangers(board.pieces, black_king, white_king) == (
+            analysis._king_danger(board.pieces, False, white_king),
+            analysis._king_danger(board.pieces, True, black_king),
+        )
+        checked += 1
+    assert checked > 2000
+
+
+def test_material_matches_reference_on_random_positions():
+    # (a) material()も表引き版が従来の集計と一致する。
+    for board in _random_positions(seed=2, games=10):
+        black = white = 0
+        for code in board.pieces:
+            if code:
+                value = analysis.PIECE_VALUES[code % analysis._WHITE_OFFSET]
+                if code < analysis._WHITE_OFFSET:
+                    black += value
+                else:
+                    white += value
+        hand_black, hand_white = board.pieces_in_hand
+        black += sum(n * v for n, v in zip(hand_black, analysis.HAND_PIECE_VALUES))
+        white += sum(n * v for n, v in zip(hand_white, analysis.HAND_PIECE_VALUES))
+        assert analysis.material(board) == (black, white)
+
+
+def test_eval_cache_does_not_change_search_result(monkeypatch):
+    # (b) キャッシュなしの探索と、score・PV・ノード数が一致する。
+    boards = [cshogi.Board(RANK_MOVE86_SFEN), cshogi.Board()]
+    for board in boards:
+        cached = analysis.search_material(board, depth=3)
+        monkeypatch.setattr(analysis._Searcher, "_eval", lambda self: analysis._eval_for_side_to_move(self.board))
+        uncached = analysis.search_material(board, depth=3)
+        monkeypatch.undo()
+        assert cached == uncached
+
+
+def test_eval_cache_distinguishes_hands_and_turn():
+    # (c) 盤面が同じでも持ち駒・手番が違えば別の評価値を返す。
+    searcher = analysis._Searcher(cshogi.Board("4k4/9/9/9/9/9/9/9/4K4 b P 1"), 1000)
+    with_pawn = searcher._eval()
+    searcher.board = cshogi.Board("4k4/9/9/9/9/9/9/9/4K4 b - 1")
+    assert searcher._eval() == 0 != with_pawn
+    searcher.board = cshogi.Board("4k4/9/9/9/9/9/9/9/4K4 w P 1")
+    assert searcher._eval() == -100
