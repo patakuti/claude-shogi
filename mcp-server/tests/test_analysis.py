@@ -2112,9 +2112,9 @@ def test_eval_cache_distinguishes_hands_and_turn():
 
 import pytest
 
-from shogi_mcp import native_eval
+from shogi_mcp import native_eval, native_lib
 
-_native_built = native_eval.LIB_PATH.exists()
+_native_built = native_lib.enabled()
 
 
 def _load_native():
@@ -2152,7 +2152,7 @@ def test_native_eval_can_be_disabled_by_env(monkeypatch):
 def test_native_eval_falls_back_when_library_missing(monkeypatch, tmp_path):
     # (b)
     monkeypatch.delenv("SHOGI_MCP_NATIVE", raising=False)
-    monkeypatch.setattr(native_eval, "LIB_PATH", tmp_path / "missing.so")
+    monkeypatch.setattr(native_lib, "LIB_PATH", tmp_path / "missing.so")
     assert _load_native() is None
 
 
