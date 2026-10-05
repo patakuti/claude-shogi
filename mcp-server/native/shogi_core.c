@@ -9,10 +9,10 @@ static const int DF[8] = {0, 0, -1, 1, -1, 1, 1, -1};
 static const int DR[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
 static const int FLIP[8] = {1, 0, 2, 3, 7, 6, 5, 4}; /* 段方向を反転(後手用) */
 
-static uint8_t STEP_DIR[32][8];  /* 駒コードごとの1マス移動方向 */
-static uint8_t SLIDE_DIR[32][8]; /* 駒コードごとの走り方向 */
-static int8_t RAY[81][8][8];     /* sqから方向dに進むマス列(-1終端) */
-static int8_t KNIGHT_TO[2][81][2]; /* 色ごとの桂の移動先(-1なし) */
+uint8_t STEP_DIR[32][8];  /* 駒コードごとの1マス移動方向 */
+uint8_t SLIDE_DIR[32][8]; /* 駒コードごとの走り方向 */
+int8_t RAY[81][8][8];     /* sqから方向dに進むマス列(-1終端) */
+int8_t KNIGHT_TO[2][81][2]; /* 色ごとの桂の移動先(-1なし) */
 static int8_t KNIGHT_FROM[2][81][2]; /* sqを攻撃する色の桂の位置 */
 static const int HAND_TYPE[7] = {PC_PAWN, PC_LANCE, PC_KNIGHT, PC_SILVER, PC_GOLD, PC_BISHOP, PC_ROOK};
 
@@ -287,6 +287,33 @@ int pos_attacked(const Pos *pos, int sq, int by_color)
     return 0;
 }
 
+/* sqに利いている by_color の駒の数(ピン・王手放置は考慮しない)。 */
+int pos_count_attackers(const Pos *pos, int sq, int by_color)
+{
+    int count = 0;
+    for (int d = 0; d < 8; d++) {
+        const int8_t *ray = RAY[sq][d];
+        for (int i = 0; i < 8 && ray[i] >= 0; i++) {
+            int code = pos->board[ray[i]];
+            if (!code)
+                continue;
+            if (color_of(code) == by_color) {
+                int opp = d ^ 1;
+                if (SLIDE_DIR[code][opp] || (i == 0 && STEP_DIR[code][opp]))
+                    count++;
+            }
+            break;
+        }
+    }
+    int knight = PC_KNIGHT + (by_color ? PC_WHITE : 0);
+    for (int k = 0; k < 2; k++) {
+        int from = KNIGHT_FROM[by_color][sq][k];
+        if (from >= 0 && pos->board[from] == knight)
+            count++;
+    }
+    return count;
+}
+
 int pos_in_check(const Pos *pos) { return pos_attacked(pos, pos->king[pos->side], pos->side ^ 1); }
 
 /* ---- 着手 ---- */
@@ -384,7 +411,7 @@ static int depth_from_far_rank(int color, int r) { return color == BLACK ? r : 8
 static int in_zone(int color, int r) { return depth_from_far_rank(color, r) <= 2; }
 
 /* 疑似合法手(自玉の王手放置・打ち歩詰めは未判定)を生成する。 */
-static int gen_pseudo(const Pos *pos, Move *out)
+static int gen_pseudo(const Pos *pos, Move *out, int captures_only, const uint8_t *evasion)
 {
     int side = pos->side, n = 0;
     for (int from = 0; from < 81; from++) {
@@ -397,7 +424,9 @@ static int gen_pseudo(const Pos *pos, Move *out)
 #define ADD_MOVE(to_sq)                                                                         \
     do {                                                                                        \
         int to_ = (to_sq), tcode = pos->board[to_];                                             \
-        if (tcode && color_of(tcode) == side)                                                   \
+        if (tcode ? color_of(tcode) == side : captures_only)                                    \
+            break;                                                                              \
+        if (evasion && type != PC_KING && !evasion[to_])                                        \
             break;                                                                              \
         int tr_ = to_ % 9, promo_ok = can_promote_piece && (in_zone(side, r) || in_zone(side, tr_)); \
         int far_ = depth_from_far_rank(side, tr_), dead = 0;                                    \
@@ -434,12 +463,12 @@ static int gen_pseudo(const Pos *pos, Move *out)
 #undef ADD_MOVE
     }
     /* 打つ手 */
-    for (int idx = 0; idx < 7; idx++) {
+    for (int idx = 0; idx < 7 && !captures_only; idx++) {
         if (!pos->hand[side][idx])
             continue;
         int type = HAND_TYPE[idx], piece = type + (side ? PC_WHITE : 0);
         for (int to = 0; to < 81; to++) {
-            if (pos->board[to])
+            if (pos->board[to] || (evasion && !evasion[to]))
                 continue;
             int far = depth_from_far_rank(side, to % 9);
             if ((type == PC_PAWN || type == PC_LANCE) && far == 0)
@@ -462,6 +491,85 @@ static int gen_pseudo(const Pos *pos, Move *out)
 
 static int is_pawn_drop(Move m) { return MV_IS_DROP(m) && (MV_PIECE(m) & 15) == PC_PAWN; }
 
+/* 王手されている場合に1を返し、王手を外せる非玉の手の到達先(王手駒を取るか、間に入るマス)を
+ * mask[]に立てる。両王手なら空(玉の移動だけが合法)。 */
+static int evasion_mask(const Pos *pos, uint8_t *mask)
+{
+    int side = pos->side, king = pos->king[side], by = side ^ 1, checkers = 0;
+    int checker_sq = -1, checker_dir = -1;
+    for (int d = 0; d < 8; d++) {
+        const int8_t *ray = RAY[king][d];
+        for (int i = 0; i < 8 && ray[i] >= 0; i++) {
+            int code = pos->board[ray[i]];
+            if (!code)
+                continue;
+            if (color_of(code) == by) {
+                int opp = d ^ 1;
+                if (SLIDE_DIR[code][opp] || (i == 0 && STEP_DIR[code][opp])) {
+                    checkers++;
+                    checker_sq = ray[i];
+                    checker_dir = (i == 0 || !SLIDE_DIR[code][opp]) ? -1 : d;
+                }
+            }
+            break;
+        }
+    }
+    int knight = PC_KNIGHT + (by ? PC_WHITE : 0);
+    for (int k = 0; k < 2; k++) {
+        int from = KNIGHT_FROM[by][king][k];
+        if (from >= 0 && pos->board[from] == knight) {
+            checkers++;
+            checker_sq = from;
+            checker_dir = -1;
+        }
+    }
+    if (checkers == 0)
+        return 0;
+    memset(mask, 0, 81);
+    if (checkers == 1) {
+        mask[checker_sq] = 1;
+        if (checker_dir >= 0) {
+            const int8_t *ray = RAY[king][checker_dir];
+            for (int i = 0; i < 8 && ray[i] >= 0 && ray[i] != checker_sq; i++)
+                mask[ray[i]] = 1;
+        }
+    }
+    return 1;
+}
+
+/* 王手されていないとき、動かすと自玉が取られる(ピンされている)自駒のマスを pinned[] に立てる。 */
+static void find_pinned(const Pos *pos, uint8_t *pinned)
+{
+    int side = pos->side, king = pos->king[side];
+    memset(pinned, 0, 81);
+    for (int d = 0; d < 8; d++) {
+        const int8_t *ray = RAY[king][d];
+        int candidate = -1;
+        for (int i = 0; i < 8 && ray[i] >= 0; i++) {
+            int code = pos->board[ray[i]];
+            if (!code)
+                continue;
+            if (candidate < 0) {
+                if (color_of(code) != side)
+                    break; /* 最初に当たったのが敵駒なら、挟む自駒はない */
+                candidate = ray[i];
+            } else {
+                if (color_of(code) != side && SLIDE_DIR[code][d ^ 1])
+                    pinned[candidate] = 1;
+                break;
+            }
+        }
+    }
+}
+
+/* 打つ歩が相手玉に王手をかけるか(歩の利きの先が相手玉)。 */
+static int pawn_drop_gives_check(const Pos *pos, Move m)
+{
+    int to = (int)MV_TO(m), side = pos->side;
+    int target = side == BLACK ? to % 9 - 1 : to % 9 + 1;
+    return target >= 0 && target < 9 && (to / 9) * 9 + target == pos->king[side ^ 1];
+}
+
 /* 手mを指した後、自玉が取られず、打ち歩詰めでもないか。posは一時的に変更して戻す。 */
 static int legal_after(Pos *pos, Move m)
 {
@@ -474,24 +582,48 @@ static int legal_after(Pos *pos, Move m)
     return ok;
 }
 
-int pos_gen_legal(Pos *pos, Move *out)
+/* 疑似合法手のうち、合法なものだけを out に詰める。王手されていない場合、ピンされていない
+ * 駒の移動と打つ手は自玉を危険にしないため、着手による確認を省く(王手がけの歩打ちのみ
+ * 打ち歩詰めを確認する)。 */
+static int filter_legal(Pos *pos, const Move *pseudo, int n, Move *out, int in_check)
 {
-    Move pseudo[MAX_MOVES];
-    int n = gen_pseudo(pos, pseudo), k = 0;
-    for (int i = 0; i < n; i++)
-        if (legal_after(pos, pseudo[i]))
-            out[k++] = pseudo[i];
+    int k = 0;
+    uint8_t pinned[81];
+    if (!in_check)
+        find_pinned(pos, pinned);
+    for (int i = 0; i < n; i++) {
+        Move m = pseudo[i];
+        int safe = 0;
+        if (!in_check) {
+            if (MV_IS_DROP(m))
+                safe = !(is_pawn_drop(m) && pawn_drop_gives_check(pos, m));
+            else
+                safe = (MV_PIECE(m) & 15) != PC_KING && !pinned[MV_FROM(m)];
+        }
+        if (safe || legal_after(pos, m))
+            out[k++] = m;
+    }
     return k;
 }
 
-int pos_has_legal_move(Pos *pos)
+int pos_gen_legal_ex(Pos *pos, Move *out, int captures_only)
 {
     Move pseudo[MAX_MOVES];
-    int n = gen_pseudo(pos, pseudo);
-    for (int i = 0; i < n; i++)
-        if (legal_after(pos, pseudo[i]))
-            return 1;
-    return 0;
+    uint8_t mask[81];
+    int in_check = evasion_mask(pos, mask);
+    int n = gen_pseudo(pos, pseudo, captures_only, in_check ? mask : NULL);
+    return filter_legal(pos, pseudo, n, out, in_check);
+}
+
+int pos_gen_legal(Pos *pos, Move *out) { return pos_gen_legal_ex(pos, out, 0); }
+
+int pos_has_legal_move(Pos *pos)
+{
+    Move pseudo[MAX_MOVES], legal[MAX_MOVES];
+    uint8_t mask[81];
+    int in_check = evasion_mask(pos, mask);
+    int n = gen_pseudo(pos, pseudo, 0, in_check ? mask : NULL);
+    return filter_legal(pos, pseudo, n, legal, in_check) > 0;
 }
 
 /* ---- USI / perft ---- */

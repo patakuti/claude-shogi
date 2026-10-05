@@ -52,12 +52,20 @@ typedef struct {
 } Pos;
 
 void core_init(void);
+
+/* 駒の動きの表(shogi_core.c で生成。評価・探索も参照する)。 */
+extern uint8_t STEP_DIR[32][8];    /* 駒コード×方向: 1マス移動できるか */
+extern uint8_t SLIDE_DIR[32][8];   /* 駒コード×方向: 走れるか */
+extern int8_t RAY[81][8][8];       /* マス×方向: 進むマス列(-1終端) */
+extern int8_t KNIGHT_TO[2][81][2]; /* 色×マス: 桂の移動先(-1なし) */
 int pos_from_sfen(Pos *pos, const char *sfen);
 int pos_to_sfen(const Pos *pos, char *buf, int buflen);
 int pos_gen_legal(Pos *pos, Move *out);
+int pos_gen_legal_ex(Pos *pos, Move *out, int captures_only); /* captures_only: 取る手のみ(打つ手を除く) */
 int pos_has_legal_move(Pos *pos);
 int pos_in_check(const Pos *pos);
 int pos_attacked(const Pos *pos, int sq, int by_color);
+int pos_count_attackers(const Pos *pos, int sq, int by_color);
 void pos_make(Pos *pos, Move m);
 void pos_unmake(Pos *pos, Move m);
 void pos_make_null(Pos *pos);
@@ -65,5 +73,8 @@ void pos_unmake_null(Pos *pos);
 int move_to_usi(Move m, char *buf);
 Move move_from_usi(Pos *pos, const char *usi);
 uint64_t pos_perft(Pos *pos, int depth);
+
+/* shogi_eval.c: 材料点+玉の安全度の評価(手番側視点)。shogi_init()で価値表を設定すること。 */
+int eval_side_to_move(const Pos *pos);
 
 #endif
