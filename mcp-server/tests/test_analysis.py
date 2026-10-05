@@ -2164,3 +2164,60 @@ def test_search_results_match_between_native_and_python(monkeypatch):
     monkeypatch.setattr(analysis, "_eval_for_side_to_move", analysis._eval_python)
     with_python = [analysis.search_material(b, depth=3) for b in boards]
     assert with_native == with_python
+
+
+# --- 探索の効率化(§35) ---------------------------------------------------------
+
+# 後手金5e(無防備)を先手飛5hが取れる。
+FREE_CAPTURE_SFEN = "8k/9/9/9/4g4/9/9/4R4/K8 b - 1"
+# 取る駒(金)が取られる駒(銀)より高いが、取り返しても飛・角の取り返しの連鎖でこちらが得をする局面
+# (取り返しの手段がある取りを「損な取り」として枝刈りしないこと。§35.1の静止探索の枝刈り)。
+SUPPORTED_CAPTURE_SFEN = "l4gknl/3rg1sb1/p3pp1pp/1pp3p2/4P2P1/1SPs2P2/LP1G1P2P/1BK1G2R1/1N5NL b NPs2p 39"
+
+
+def test_search_finds_free_capture():
+    # (a)
+    result = analysis.search_material(cshogi.Board(FREE_CAPTURE_SFEN), depth=2)
+    assert result["pv_usi"][0] == "5h5e"
+    assert result["score"] > 400
+
+
+def test_search_is_deterministic():
+    # (b) 置換表・ヒストリ・キラーの初期化漏れや順序依存がないこと。
+    board = cshogi.Board(RANK_MOVE86_SFEN)
+    assert analysis.search_material(board, depth=3) == analysis.search_material(board, depth=3)
+
+
+def test_search_result_format_is_unchanged():
+    # (c)
+    result = analysis.search_material(cshogi.Board(RANK_MOVE86_SFEN), depth=2)
+    assert set(result) == {"score", "pv_usi", "nodes", "truncated", "completed_depth"}
+    assert result["completed_depth"] == 2 and result["truncated"] is False
+
+
+def test_quiesce_keeps_captures_that_have_a_recapture():
+    # (d) 金で銀を取る手は相手の飛に取り返されるが、こちらの角が取り返せる。
+    searcher = analysis._Searcher(cshogi.Board(SUPPORTED_CAPTURE_SFEN), 10_000)
+    stand_pat = searcher._eval()
+    score, _ = searcher.quiesce(-analysis.MATE_SCORE, analysis.MATE_SCORE)
+    assert score > stand_pat + 500
+
+
+def test_search_respects_node_limit_and_marks_truncation():
+    # (e)
+    result = analysis.search_material(cshogi.Board(RANK_MOVE86_SFEN), depth=4, node_limit=500)
+    assert result["truncated"] is True
+    assert result["nodes"] <= 500 + 50  # 打ち切り後は再帰を巻き戻すだけ
+
+
+def test_shared_tables_do_not_leak_truncated_results():
+    # (f) 打ち切られた探索の結果を置換表に書き込まない。
+    tables = analysis._SearchTables()
+    board = cshogi.Board(RANK_MOVE86_SFEN)
+    searcher = analysis._Searcher(board, 300, tables)
+    analysis._iterative_deepen(searcher, 4)
+    assert searcher.truncated
+    full = analysis._Searcher(cshogi.Board(RANK_MOVE86_SFEN), 50_000, tables)
+    shared = analysis._iterative_deepen(full, 2)
+    fresh = analysis._iterative_deepen(analysis._Searcher(cshogi.Board(RANK_MOVE86_SFEN), 50_000), 2)
+    assert shared[0] == fresh[0]

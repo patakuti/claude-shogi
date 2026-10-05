@@ -26,3 +26,4 @@ __pycache__/
 
 # ネイティブ評価関数のビルド成果物(scripts/build_native.sh)
 /mcp-server/src/shogi_mcp/_native/
+/scripts/.strength_cache.json
