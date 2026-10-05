@@ -2119,7 +2119,6 @@ _native_built = native_lib.enabled()
 
 def _load_native():
     return native_eval.load(
-        analysis._STEP_TARGETS, analysis._RAY_TARGETS, analysis._KING_ZONES,
         analysis._BLACK_VALUE, analysis._WHITE_VALUE, analysis.HAND_PIECE_VALUES,
         analysis.KING_SAFETY_WEIGHT, fallback=analysis._eval_python,
     )

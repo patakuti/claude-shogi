@@ -15,7 +15,7 @@ from typing import Optional
 import cshogi
 from cshogi import KIF
 
-from . import native_eval
+from . import native_eval, native_search
 
 # 駒割り点数(§11.2)。相対比較にのみ使うため厳密な値である必要はない。
 # 成駒は「盤上の働き」で採点する(取られると相手の持ち駒には元の駒として入るが、
@@ -341,9 +341,6 @@ def _eval_python(board: cshogi.Board) -> int:
 # 評価関数の入口(§34)。ネイティブ実装(任意)があればそれを、なければPython実装を使う。
 # どちらも同じ値を返す(同値性はテストで検証)。
 _eval_native = native_eval.load(
-    _STEP_TARGETS,
-    _RAY_TARGETS,
-    _KING_ZONES,
     _BLACK_VALUE,
     _WHITE_VALUE,
     HAND_PIECE_VALUES,
@@ -625,6 +622,13 @@ class _SearchTables:
         # hash -> (depth, flag, score, best_move)。flagはTT_EXACT/TT_LOWER/TT_UPPER。
         self.tt: dict[int, tuple[int, int, int, int]] = {}
         self.history: dict[int, int] = {}
+        self._native_context = None
+
+    def native_context(self):
+        """ネイティブ探索の共有状態(置換表・ヒストリ)。ネイティブ実装が使えない場合はNone。"""
+        if self._native_context is None and _native_search is not None:
+            self._native_context = _native_search.new_context()
+        return self._native_context
 
 
 TT_EXACT, TT_LOWER, TT_UPPER = 0, 1, 2
@@ -633,6 +637,9 @@ _LMR_MIN_DEPTH = 3
 _LMR_FULL_MOVES = 3  # この手数までは短縮せずに読む
 _FUTILITY_MARGIN = 300  # 残り深さ1手あたりの余裕(材料点スケール)
 _DELTA_MARGIN = 300  # 静止探索で、取る駒の価値にこれを足しても alpha に届かない取りは読まない
+# 同値性検証用の無効化スイッチ(§37.2)。全て無効にした探索の値は手順序に依存しない最小最大値になる。
+_TT_CUTOFFS = True
+_QUIESCE_PRUNING = True
 
 
 class _Searcher:
@@ -741,7 +748,7 @@ class _Searcher:
         for m in self._order_moves(moves):
             if self.truncated:
                 break
-            if stand_pat is not None and not cshogi.move_is_promotion(m):
+            if _QUIESCE_PRUNING and stand_pat is not None and not cshogi.move_is_promotion(m):
                 victim = PIECE_VALUES[cshogi.move_cap(m) % _WHITE_OFFSET]
                 # delta pruning: 取っても alpha に届かない取りは読まない。
                 if stand_pat + victim + _DELTA_MARGIN < alpha:
@@ -797,7 +804,7 @@ class _Searcher:
         if entry is not None:
             tt_depth, flag, tt_score, tt_move = entry
             # PVノードでは読み筋を保つため置換表のスコアでは打ち切らない(手順序にだけ使う)。
-            if not is_pv and tt_depth >= depth:
+            if _TT_CUTOFFS and not is_pv and tt_depth >= depth:
                 if flag == TT_EXACT:
                     return tt_score, []
                 if flag == TT_LOWER and tt_score >= beta:
@@ -906,6 +913,20 @@ class _Searcher:
         return best_score, best_pv
 
 
+_native_search = native_search.load(list(PIECE_VALUES.get(i, 0) for i in range(16)))
+
+
+def _make_searcher(board: cshogi.Board, node_limit: int, tables: Optional[_SearchTables] = None):
+    """ネイティブ探索があればそれを、なければPythonの`_Searcher`を返す(§37.1)。
+
+    どちらも`_iterative_deepen`が使う`search`/`nodes`/`truncated`を持つ。
+    """
+    if _native_search is not None:
+        tables = tables if tables is not None else _SearchTables()
+        return _native_search.searcher(board, node_limit, tables.native_context())
+    return _Searcher(board, node_limit, tables)
+
+
 def _iterative_deepen(searcher: _Searcher, max_depth: int) -> tuple[Optional[int], list[int], int]:
     """反復深化(§14.4): 深さ1からmax_depthまで、ノード予算を共有して順に探索する。
 
@@ -940,7 +961,7 @@ def search_material(
     反復深化(§14.4)で、打ち切られた反復の結果は捨てて直前に完了した深さを採用する。
     """
     copy = _copy_board(board)
-    searcher = _Searcher(copy, node_limit)
+    searcher = _make_searcher(copy, node_limit)
     score, pv, completed_depth = _iterative_deepen(searcher, depth)
     return {
         "score": score,
@@ -1173,7 +1194,7 @@ def verify_moves(
             copy, color=opponent_color, include_checks=True
         )
 
-        searcher = _Searcher(copy, node_limit)
+        searcher = _make_searcher(copy, node_limit)
         score, pv, completed_depth = _iterative_deepen(searcher, depth)
         entry["search_depth_completed"] = completed_depth
         entry["search_truncated"] = searcher.truncated
@@ -1269,7 +1290,7 @@ def rank_moves(
                 allows_mate_count += 1
                 continue
             info["check"] = copy.is_check()
-            searcher = _Searcher(copy, node_limit, tables)
+            searcher = _make_searcher(copy, node_limit, tables)
             score, pv, completed_depth = _iterative_deepen(searcher, depth)
             if completed_depth == 0 or score is None:
                 info["score"] = None
