@@ -146,6 +146,21 @@ scripts/setup_engine.sh
 
 スクリプト最後にUSI疎通確認(`usi`→`isready`→`go byoyomi`→`bestmove`)を自動実行する。
 
+### 評価関数のネイティブ実装(任意)
+
+浅い探索(`rank_moves`・`verify_moves`の材料点+玉の安全度の評価)をCで高速化する任意の
+ビルド。未実行でもPython実装で同じ結果が出る(速度のみ異なる)。gccが必要でLinux専用
+(他OSは未検証)。
+
+```bash
+scripts/build_native.sh
+```
+
+`mcp-server/src/shogi_mcp/_native/libshogi_eval.so`が生成される(Git管理外)。
+ビルドしていない場合、MCPサーバーはstderrに警告を1行出してPython実装を使う。
+`SHOGI_MCP_NATIVE=0`で明示的に無効化もできる。評価1回が約12µsから約2.5µsになり、
+`rank_moves`の深さ2(実戦30手目の局面)は約2.2秒から約1.0秒になった。
+
 ### MCPサーバー
 
 `.mcp.json`にサーバー`shogi`として登録済み(Claude Codeが自動で`uv run --project mcp-server shogi-mcp`を起動する)。

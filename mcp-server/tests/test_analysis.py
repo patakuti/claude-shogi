@@ -2106,3 +2106,61 @@ def test_eval_cache_distinguishes_hands_and_turn():
     assert searcher._eval() == 0 != with_pawn
     searcher.board = cshogi.Board("4k4/9/9/9/9/9/9/9/4K4 w P 1")
     assert searcher._eval() == -100
+
+
+# --- 評価関数のネイティブ実装(§34) -------------------------------------------
+
+import pytest
+
+from shogi_mcp import native_eval
+
+_native_built = native_eval.LIB_PATH.exists()
+
+
+def _load_native():
+    return native_eval.load(
+        analysis._STEP_TARGETS, analysis._RAY_TARGETS, analysis._KING_ZONES,
+        analysis._BLACK_VALUE, analysis._WHITE_VALUE, analysis.HAND_PIECE_VALUES,
+        analysis.KING_SAFETY_WEIGHT, fallback=analysis._eval_python,
+    )
+
+
+@pytest.mark.skipif(not _native_built, reason="scripts/build_native.sh not run")
+def test_native_eval_matches_python_on_random_positions():
+    # (a) ネイティブ版とPython版の評価値が完全一致する。
+    native = _load_native()
+    assert native is not None
+    checked = 0
+    for board in _random_positions(seed=3):
+        assert native(board) == analysis._eval_python(board)
+        checked += 1
+    assert checked > 2000
+
+
+@pytest.mark.skipif(not _native_built, reason="scripts/build_native.sh not run")
+def test_native_eval_is_used_by_default_entry_point():
+    assert analysis._eval_native is not None
+    assert analysis._eval_for_side_to_move is analysis._eval_native
+
+
+def test_native_eval_can_be_disabled_by_env(monkeypatch):
+    # (b)
+    monkeypatch.setenv("SHOGI_MCP_NATIVE", "0")
+    assert _load_native() is None
+
+
+def test_native_eval_falls_back_when_library_missing(monkeypatch, tmp_path):
+    # (b)
+    monkeypatch.delenv("SHOGI_MCP_NATIVE", raising=False)
+    monkeypatch.setattr(native_eval, "LIB_PATH", tmp_path / "missing.so")
+    assert _load_native() is None
+
+
+@pytest.mark.skipif(not _native_built, reason="scripts/build_native.sh not run")
+def test_search_results_match_between_native_and_python(monkeypatch):
+    # (c)
+    boards = [cshogi.Board(RANK_MOVE86_SFEN), cshogi.Board()]
+    with_native = [analysis.search_material(b, depth=3) for b in boards]
+    monkeypatch.setattr(analysis, "_eval_for_side_to_move", analysis._eval_python)
+    with_python = [analysis.search_material(b, depth=3) for b in boards]
+    assert with_native == with_python

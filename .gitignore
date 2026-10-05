@@ -23,3 +23,6 @@ __pycache__/
 # Claude Code local runtime state
 /.claude/scheduled_tasks.lock
 /.claude/settings.local.json
+
+# ネイティブ評価関数のビルド成果物(scripts/build_native.sh)
+/mcp-server/src/shogi_mcp/_native/

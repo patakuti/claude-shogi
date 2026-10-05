@@ -15,6 +15,8 @@ from typing import Optional
 import cshogi
 from cshogi import KIF
 
+from . import native_eval
+
 # 駒割り点数(§11.2)。相対比較にのみ使うため厳密な値である必要はない。
 # 成駒は「盤上の働き」で採点する(取られると相手の持ち駒には元の駒として入るが、
 # その差はmaterial()が盤・持ち駒を全数集計することで自然に反映される)。
@@ -325,7 +327,7 @@ def _king_shelter_count(pieces: list[int], color: int, king_sq: int) -> int:
     return count
 
 
-def _eval_for_side_to_move(board: cshogi.Board) -> int:
+def _eval_python(board: cshogi.Board) -> int:
     """材料点差 + 玉の安全度(§13.5)。手番側視点。"""
     pieces = board.pieces
     black, white = _material_of(pieces, board.pieces_in_hand)
@@ -334,6 +336,21 @@ def _eval_for_side_to_move(board: cshogi.Board) -> int:
     )
     score = (black - white) + KING_SAFETY_WEIGHT * (danger_to_white - danger_to_black)
     return score if board.turn == cshogi.BLACK else -score
+
+
+# 評価関数の入口(§34)。ネイティブ実装(任意)があればそれを、なければPython実装を使う。
+# どちらも同じ値を返す(同値性はテストで検証)。
+_eval_native = native_eval.load(
+    _STEP_TARGETS,
+    _RAY_TARGETS,
+    _KING_ZONES,
+    _BLACK_VALUE,
+    _WHITE_VALUE,
+    HAND_PIECE_VALUES,
+    KING_SAFETY_WEIGHT,
+    fallback=_eval_python,
+)
+_eval_for_side_to_move = _eval_native if _eval_native is not None else _eval_python
 
 
 def _pawn_drop_risk(pieces: list[int], opp_color: int, opp_pawn_count: int, sq: int) -> bool:
