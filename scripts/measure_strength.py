@@ -129,6 +129,8 @@ def main() -> int:
     ap.add_argument("--cache", default=str(Path(__file__).parent / ".strength_cache.json"))
     ap.add_argument("--node-limit", type=int, default=analysis.DEFAULT_NODE_LIMIT,
                     help="rank_moves の候補手ごとのノード上限(深さ4以上を測るときに引き上げる)")
+    ap.add_argument("--time-limit", type=float, default=None,
+                    help="rank_moves の時間予算(秒)。既定の呼び出し(深さ4・5秒)を測るときに指定する")
     ap.add_argument("--stride", type=int, default=1, help="N局面おきに抽出する(深い探索を短時間で測るため)")
     ap.add_argument("--max-positions", type=int, default=0, help="局面数の上限(0=全て。動作確認用)")
     ap.add_argument("--out", help="結果の行データをJSONで保存する")
@@ -156,7 +158,9 @@ def main() -> int:
                 board = cshogi.Board(sfen)
                 best = referee.evaluate(sfen)
                 t0 = time.perf_counter()
-                ranked = analysis.rank_moves(board, top_n=3, depth=depth, node_limit=args.node_limit)
+                ranked = analysis.rank_moves(
+                    board, top_n=3, depth=depth, node_limit=args.node_limit, time_limit=args.time_limit
+                )
                 seconds = time.perf_counter() - t0
                 candidates = [e["usi"] for e in ranked["mates"]] + [e["usi"] for e in ranked["top"]]
                 if not candidates:
@@ -168,7 +172,7 @@ def main() -> int:
                     "top3": best["best"] in candidates[:3],
                     "loss": max(0, best["cp"] - referee.value_after(board, top1_move)),
                     "actual_loss": max(0, best["cp"] - referee.value_after(board, played)),
-                    "seconds": seconds, "top_tied": ranked["top_tied"],
+                    "seconds": seconds, "top_tied": ranked["top_tied"], "reached": ranked["depth"],
                 })
                 if i % 50 == 0:
                     print(f"  depth {depth}: {i}/{len(positions)}", flush=True)

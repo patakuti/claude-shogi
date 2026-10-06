@@ -10,11 +10,16 @@ from typing import Optional
 import cshogi
 from mcp.server.fastmcp import FastMCP
 
-from . import analysis, csa_server, gui_server, kif_store, presets, rules
+from . import analysis, csa_server, gui_server, kif_store, presets, rules, tool_log
 from .usi_engine import UsiEngine, UsiEngineError, UsiTimeoutError
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ENGINE_PATH = REPO_ROOT / "engine" / "YaneuraOu-by-gcc"
+
+# rank_moves(§38): 既定は深さ4・時間予算5秒。ノード上限は時間予算が実質の上限になるよう大きくする。
+RANK_MOVES_DEFAULT_DEPTH = 4
+RANK_MOVES_DEFAULT_TIME_LIMIT = 5.0
+RANK_MOVES_NODE_LIMIT = 5_000_000
 GAMES_DIR = REPO_ROOT / "games"
 
 # wait_for_user_moveの1回の呼び出し内でポーリングする最大秒数(02_design.md §26.4)。
@@ -111,6 +116,18 @@ _session_lock = threading.Lock()
 
 def _current_session() -> Optional[SessionState]:
     return _session
+
+
+def _log_context() -> tuple[Optional[Path], Optional[int]]:
+    """ツール呼び出しログ(§39)用の(KIFのパス, 現在の手数)。対局がなければ(None, None)。"""
+    session = _session
+    if session is None:
+        return None, None
+    return session.kif_store.path, len(session.game.board.history)
+
+
+def _logged(tool: str):
+    return tool_log.logged(tool, _log_context)
 
 
 _STATUS_LABELS = {
@@ -362,6 +379,7 @@ def _apply_validated_move(
 
 
 @mcp.tool()
+@_logged("apply_move")
 def apply_move(
     move: str, comment: str = "", include_board: bool = False, include_legal_moves: bool = False
 ) -> dict:
@@ -559,6 +577,7 @@ def _board_snapshot() -> Optional[cshogi.Board]:
 
 
 @mcp.tool()
+@_logged("analyze_position")
 def analyze_position() -> dict:
     """局面の構造化要約を返す(盤面は変更しない)。Claude思考モード(/shogi-brain)用。
 
@@ -633,6 +652,7 @@ def analyze_position() -> dict:
 
 
 @mcp.tool()
+@_logged("verify_moves")
 def verify_moves(
     moves: list[str],
     depth: int = analysis.DEFAULT_SEARCH_DEPTH,
@@ -738,13 +758,16 @@ def verify_moves(
 
 
 @mcp.tool()
-def rank_moves(top_n: int = 10, depth: int = 1) -> dict:
+@_logged("rank_moves")
+def rank_moves(top_n: int = 10, depth: int = RANK_MOVES_DEFAULT_DEPTH,
+               time_limit: float = RANK_MOVES_DEFAULT_TIME_LIMIT) -> dict:
     """全合法手を浅い探索で評価し、上位top_n件を要約して返す(盤面は変更しない)。
 
-    Claude思考モード・CSA対局モード用の候補手スクリーニング(§31)。USIエンジンは使わない。
+    Claude思考モード・CSA対局モード用の候補手スクリーニング(§31, §38)。USIエンジンは使わない。
     検証にかける候補の漏れを防ぐための道具であり、指す手を決める道具ではない
     (最終判断はverify_movesの結果と自分の構想で行う)。
-    戻り値: legal_count(合法手数)・depth・mates(相手玉を詰ます手。あれば最優先で
+    戻り値: legal_count(合法手数)・depth(実際に完了した深さ)・depth_requested・
+    time_limited(時間予算で打ち切ったか)・mates(相手玉を詰ます手。あれば最優先で
     verify_movesで確認する)・allows_mate_count(頓死するため除外した手数)・
     top(score降順の上位。各要素はusi/kif/score/material_change/check)・
     top_tied(1位と同じscoreの手の数)。
@@ -752,9 +775,12 @@ def rank_moves(top_n: int = 10, depth: int = 1) -> dict:
     読み筋適用後の材料点差の変化(verify_movesと同じ)。探索が完了しなかった手は
     両方null(末尾)。top_tiedが4以上(序盤など多数の手が横並び)のとき、topの
     並びは合法手の生成順にすぎず意味を持たない。
-    top_n: [1, 30]にクランプ。depth: 探索深さ、[1, 2]にクランプ
-    (実測: 深さ1で0.3〜0.6秒、深さ2で約7〜9秒・合法手が多い局面では最悪約20秒強、
-    深さ3は30秒超のため不可、§31.1)。深さ2は終盤の勝負所でのみ指定すること。
+    全候補手を深さ1から順に同じ深さで読み、time_limit秒(既定5秒、[1, 60])を超えたら
+    完了した最後の深さの結果を返す。depth: 要求する深さ(既定4、[1, 6])。
+    ネイティブ実装(scripts/build_native.sh)がある場合の実測(§37.4): 深さ4は平均0.67秒・
+    最大約9秒、深さ5は平均2.9秒・最大約76秒。ネイティブ実装がないと数倍〜十数倍遅く、
+    時間予算内で到達できる深さまでになる(time_limited=trueでdepthが要求より小さい)。
+    top_n: [1, 30]にクランプ。
     """
     with _session_lock:
         session = _current_session()
@@ -764,13 +790,18 @@ def rank_moves(top_n: int = 10, depth: int = 1) -> dict:
         history = session.game.board.history
         prev_move = history[-1] if history else None
     top_n = max(1, min(30, top_n))
-    depth = max(1, min(2, depth))
-    result = analysis.rank_moves(board, top_n=top_n, depth=depth, prev_move=prev_move)
+    depth = max(1, min(6, depth))
+    time_limit = max(1.0, min(60.0, float(time_limit)))
+    result = analysis.rank_moves(
+        board, top_n=top_n, depth=depth, node_limit=RANK_MOVES_NODE_LIMIT,
+        prev_move=prev_move, time_limit=time_limit,
+    )
     result["ok"] = True
     return result
 
 
 @mcp.tool()
+@_logged("simulate_line")
 def simulate_line(moves: list[str]) -> dict:
     """読み筋(双方の指し手のUSI表記列)を盤のコピーへ順に適用する(実盤面は変更しない)。
 
