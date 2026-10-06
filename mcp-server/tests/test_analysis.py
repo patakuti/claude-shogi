@@ -2120,7 +2120,7 @@ _native_built = native_lib.enabled()
 def _load_native():
     return native_eval.load(
         analysis._BLACK_VALUE, analysis._WHITE_VALUE, analysis.HAND_PIECE_VALUES,
-        analysis.KING_SAFETY_WEIGHT, fallback=analysis._eval_python,
+        analysis.EVAL_WEIGHTS, fallback=analysis._eval_python,
     )
 
 
@@ -2255,3 +2255,87 @@ def test_rank_moves_depth_one_is_unchanged_by_iterative_structure():
     assert result["top"][0]["score"] == max(expected.values())
     for entry in result["top"]:
         assert expected[entry["usi"]] == entry["score"]
+
+
+# --- 玉の危険度項(§40) -------------------------------------------------------
+
+# 項の素点の並び: (S, E, H, HO) × (先手玉, 後手玉)を S_b,S_w,E_b,E_w,H_b,H_w,HO_b,HO_w の順で返す。
+# 先手玉5九の周囲5マスのうち5八金・4八銀が自陣の囲い。
+KING_TERMS_SHELTER_SFEN = "4k4/9/9/9/9/9/9/4GS3/4K4 b - 1"
+# 先手が飛・金を持つ(後手玉への持ち駒の脅威H=2、後手玉の周囲5マスが全て自駒なし)。
+KING_TERMS_HAND_SFEN = "4k4/9/9/9/9/9/9/4GS3/4K4 b RG2P 1"
+# 後手飛1九が先手玉の周囲の4九へ利く(5九の玉で止まる)。
+KING_TERMS_ATTACKED_SFEN = "4k4/9/9/9/9/9/9/9/4K3r b - 1"
+ZERO_WEIGHTS = analysis.EvalWeights(attack=analysis.KING_SAFETY_WEIGHT, shelter=0, open_squares=0, hand=0, hand_open=0)
+SAMPLE_WEIGHTS = analysis.EvalWeights(attack=40, shelter=35, open_squares=12, hand=10, hand_open=6)
+
+
+def test_king_terms_shelter_count_and_open_squares():
+    # 先手: 囲い2枚、周囲5マスのうち金銀の2マスを除く3マスが逃げ道。後手: 囲いなし、5マス全て逃げ道。
+    assert analysis._king_terms(cshogi.Board(KING_TERMS_SHELTER_SFEN)) == (2, 0, 3, 5, 0, 0, 0, 0)
+
+
+def test_king_terms_hand_counts_exclude_pawns():
+    # 先手の持ち駒 飛・金(歩2は数えない)→ 後手玉に対するH=2、HO=2×5。
+    terms = analysis._king_terms(cshogi.Board(KING_TERMS_HAND_SFEN))
+    assert terms[4:] == (0, 2, 0, 10)
+
+
+def test_king_terms_attacked_square_is_not_open():
+    # 後手飛が4九へ利くので先手玉の逃げ道は5マス中4マス(利きのある4九を除く)。
+    terms = analysis._king_terms(cshogi.Board(KING_TERMS_ATTACKED_SFEN))
+    assert terms[2] == 4 and terms[0] == 0
+
+
+def test_eval_with_zero_new_weights_equals_reference():
+    # (§40.7) 新しい重みを0にすると従来の評価(材料+A項)と完全に一致する。
+    for board in _random_positions(seed=11, games=10):
+        assert analysis._eval_python(board, ZERO_WEIGHTS) == _reference_eval(board)
+
+
+def test_eval_with_weights_matches_formula():
+    for board in _random_positions(seed=12, games=10):
+        s_b, s_w, e_b, e_w, h_b, h_w, ho_b, ho_w = analysis._king_terms(board)
+        w = SAMPLE_WEIGHTS
+        extra = (w.shelter * (s_b - s_w) + w.open_squares * (e_b - e_w)
+                 + w.hand * (h_w - h_b) + w.hand_open * (ho_w - ho_b))
+        extra = extra if board.turn == cshogi.BLACK else -extra
+        assert analysis._eval_python(board, SAMPLE_WEIGHTS) == _reference_eval(board) + extra
+
+
+def _colour_swapped(board: cshogi.Board) -> cshogi.Board:
+    """盤を180°回転し先後を入れ替えた局面(手番も入れ替わる)。"""
+    pieces = [(p + 16) % 32 if p else 0 for p in reversed(board.pieces)]  # 先後を入れ替えて盤を反転
+    swapped = cshogi.Board()
+    swapped.set_pieces(pieces, board.pieces_in_hand[::-1])
+    swapped.turn = 1 - board.turn
+    return swapped
+
+
+def test_eval_is_symmetric_under_colour_swap():
+    # (§40.7) 先後と盤を反転した局面は、手番側視点で同じ評価値になる。
+    for board in _random_positions(seed=13, games=5):
+        assert analysis._eval_python(_colour_swapped(board), SAMPLE_WEIGHTS) == analysis._eval_python(
+            board, SAMPLE_WEIGHTS
+        )
+
+
+@pytest.fixture
+def restore_native_weights():
+    yield
+    _load_native()  # shogi_initはグローバルな重みを書き換えるので、既定の重みに戻す
+
+
+@pytest.mark.skipif(not _native_built, reason="scripts/build_native.sh not run")
+def test_native_eval_matches_python_with_nonzero_weights(restore_native_weights):
+    # (§40.7) 新しい項もネイティブ版とPython版で完全一致する。
+    native = native_eval.load(
+        analysis._BLACK_VALUE, analysis._WHITE_VALUE, analysis.HAND_PIECE_VALUES,
+        SAMPLE_WEIGHTS, fallback=analysis._eval_python,
+    )
+    assert native is not None
+    checked = 0
+    for board in _random_positions(seed=14):
+        assert native(board) == analysis._eval_python(board, SAMPLE_WEIGHTS)
+        checked += 1
+    assert checked > 2000

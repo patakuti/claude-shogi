@@ -3,7 +3,7 @@
 共有ライブラリは`native_lib`が読み込む。ライブラリが使えない場合は`None`を返し、
 呼び出し側(analysis.py)はPython実装を使う(挙動は変わらず速度のみ異なる)。
 利きの定義はC側(shogi_core.c)の駒の動きの表を使い、Pythonは駒の価値・持ち駒の価値・
-玉の安全度の重みだけを渡す。
+玉の危険度の重み(analysis.EvalWeights)だけを渡す。
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ def load(
     black_value: Sequence[int],
     white_value: Sequence[int],
     hand_value: Sequence[int],
-    king_safety_weight: int,
+    weights: Sequence[int],
     fallback: Callable[[cshogi.Board], int],
 ) -> Optional[Callable[[cshogi.Board], int]]:
     """手番側視点の評価関数を返す。使えなければNone。
@@ -38,13 +38,13 @@ def load(
         return None
     try:
         values = ctypes.c_int32 * _NCODE
-        lib.shogi_init.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int32]
+        lib.shogi_init.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
         lib.shogi_init.restype = None
         lib.shogi_eval_black.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
         lib.shogi_eval_black.restype = ctypes.c_int32
         lib.shogi_init(
             values(*black_value), values(*white_value),
-            (ctypes.c_int32 * 7)(*hand_value), king_safety_weight,
+            (ctypes.c_int32 * 7)(*hand_value), (ctypes.c_int32 * 5)(*weights),
         )
     except (OSError, AttributeError) as exc:
         logger.warning("native eval failed to load (%s); using Python implementation", exc)
