@@ -539,18 +539,26 @@ def test_rank_moves_returns_summary_without_moving():
     assert any(k.startswith("同") for k in kifs)  # 3a2bの同銀
 
 
-def test_rank_moves_clamps_top_n_and_depth():
-    # (h) top_nは[1, 30]、depthは[1, 2](§31.1の実測根拠)。
+def test_rank_moves_clamps_arguments_and_uses_defaults():
+    # (e) top_nは[1, 30]、depthは[1, 6]、time_limitは[1, 60]。既定は深さ4・5秒(§38.3)。
     server.new_game(difficulty=1, user_side="black", mode="brain")
     captured = {}
     original = server.analysis.rank_moves
 
-    def spy(board, top_n, depth, prev_move):
-        captured["top_n"], captured["depth"] = top_n, depth
-        return original(board, top_n=top_n, depth=depth, prev_move=prev_move)
+    def spy(board, **kwargs):
+        captured.update(kwargs)
+        return original(board, **{**kwargs, "depth": 1})  # 実行は軽くする
 
     with mock.patch.object(server.analysis, "rank_moves", side_effect=spy):
-        server.rank_moves(top_n=0, depth=0)
-        assert (captured["top_n"], captured["depth"]) == (1, 1)
-        server.rank_moves(top_n=1_000, depth=9)
-        assert (captured["top_n"], captured["depth"]) == (30, 2)
+        server.rank_moves()
+        assert (captured["top_n"], captured["depth"], captured["time_limit"]) == (10, 4, 5.0)
+        server.rank_moves(top_n=0, depth=0, time_limit=0)
+        assert (captured["top_n"], captured["depth"], captured["time_limit"]) == (1, 1, 1.0)
+        server.rank_moves(top_n=1_000, depth=99, time_limit=1_000)
+        assert (captured["top_n"], captured["depth"], captured["time_limit"]) == (30, 6, 60.0)
+
+
+def test_rank_moves_reports_reached_depth():
+    server.new_game(difficulty=1, user_side="black", mode="brain")
+    result = server.rank_moves(depth=2, time_limit=60)
+    assert result["depth"] == 2 and result["depth_requested"] == 2 and result["time_limited"] is False

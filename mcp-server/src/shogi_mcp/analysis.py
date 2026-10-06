@@ -8,6 +8,7 @@ USIエンジンは使わず、詰み探索(cshogi組み込み)・自前の利き
 
 from __future__ import annotations
 
+import time
 from itertools import compress
 from operator import mul
 from typing import Optional
@@ -1260,24 +1261,28 @@ def rank_moves(
     node_limit: int = DEFAULT_NODE_LIMIT,
     mate_ply: int = DEFAULT_MATE_PLY,
     prev_move: Optional[int] = None,
+    time_limit: Optional[float] = None,
 ) -> dict:
-    """全合法手の事前スクリーニング(§31.2)。盤面は変更しない。
+    """全合法手の事前スクリーニング(§31.2, §38.2)。盤面は変更しない。
 
     全合法手を浅い探索(材料点+玉の安全度、§13.5)で評価し、手番側視点の
     評価値(score)の降順に上位top_n件を返す。詰ます手はmatesに分け、
     頓死する手(着手後に相手からmate_ply手以内の詰み)は除外して件数のみ
     allows_mate_countに数える。material_changeはverify_movesと同じく
-    読み筋(PV)適用後の実材料点差。打ち切りで1回も探索が完了しなかった手は
+    読み筋(PV)適用後の実材料点差。ノード上限で探索が完了しなかった手は
     score=Noneとして末尾に置く。top_tiedは1位と同じscoreの手の数。
     prev_moveは直前の指し手(KIF表記の「同」判定用。Noneなら考慮しない)。
+
+    全候補手を深さ1からdepthまで同じ深さで順に読む(反復深化)。time_limit(秒、Noneは無制限)を
+    超えたら、完了した最後の深さの結果を返す(深さ1は必ず完了する)。戻り値のdepthは
+    実際に完了した深さ、depth_requestedは要求した深さ、time_limitedは時間で打ち切ったか。
     """
     copy = _copy_board(board)
     mover_is_black = copy.turn == cshogi.BLACK
     base_black, base_white = material(copy)
     mates: list[dict] = []
-    ranked: list[dict] = []
+    candidates: list[tuple[int, dict]] = []
     allows_mate_count = 0
-    tables = _SearchTables()  # 候補手間で合流する局面の探索結果を共有する(§35.1)
     legal = list(copy.legal_moves)
     for move in legal:
         info = {"usi": cshogi.move_to_usi(move), "kif": KIF.move_to_kif(move, prev_move)}
@@ -1285,37 +1290,68 @@ def rank_moves(
         try:
             if copy.is_game_over():
                 mates.append(info)
-                continue
-            if find_mate(copy, mate_ply) is not None:
+            elif find_mate(copy, mate_ply) is not None:
                 allows_mate_count += 1
-                continue
-            info["check"] = copy.is_check()
-            searcher = _make_searcher(copy, node_limit, tables)
-            score, pv, completed_depth = _iterative_deepen(searcher, depth)
-            if completed_depth == 0 or score is None:
-                info["score"] = None
-                info["material_change"] = None
             else:
-                for m in pv:
-                    copy.push(m)
-                end_black, end_white = material(copy)
-                for _ in pv:
-                    copy.pop()
-                info["score"] = -score
-                if mover_is_black:
-                    info["material_change"] = (end_black - end_white) - (base_black - base_white)
-                else:
-                    info["material_change"] = (end_white - end_black) - (base_white - base_black)
-            ranked.append(info)
+                info["check"] = copy.is_check()
+                candidates.append((move, info))
         finally:
             copy.pop()
+
+    def evaluate_all(search_depth: int, deadline: Optional[float]) -> Optional[list[dict]]:
+        """全候補を同じ深さで評価する。deadlineを超えたらNone(その深さは使わない)。"""
+        ranked: list[dict] = []
+        for move, info in candidates:
+            if deadline is not None and search_depth > 1 and time.perf_counter() > deadline:
+                return None
+            entry = dict(info)
+            copy.push(move)
+            try:
+                searcher = _make_searcher(copy, node_limit, tables)
+                score, pv = searcher.search(search_depth, -MATE_SCORE - 1, MATE_SCORE + 1)
+                if searcher.truncated:
+                    entry["score"] = None
+                    entry["material_change"] = None
+                else:
+                    for m in pv:
+                        copy.push(m)
+                    end_black, end_white = material(copy)
+                    for _ in pv:
+                        copy.pop()
+                    entry["score"] = -score
+                    if mover_is_black:
+                        entry["material_change"] = (end_black - end_white) - (base_black - base_white)
+                    else:
+                        entry["material_change"] = (end_white - end_black) - (base_white - base_black)
+            finally:
+                copy.pop()
+            ranked.append(entry)
+        return ranked
+
+    tables = _SearchTables()  # 候補手間・反復間で合流する局面の探索結果を共有する(§35.1)
+    started = time.perf_counter()
+    deadline = started + time_limit if time_limit is not None else None
+    ranked: list[dict] = []
+    reached = 0
+    time_limited = False
+    for search_depth in range(1, max(1, depth) + 1):
+        if deadline is not None and search_depth > 1 and time.perf_counter() > deadline:
+            time_limited = True
+            break
+        result = evaluate_all(search_depth, deadline)
+        if result is None:
+            time_limited = True
+            break
+        ranked, reached = result, search_depth
 
     ranked.sort(key=lambda e: e["score"] if e["score"] is not None else -MATE_SCORE * 10, reverse=True)
     top_score = ranked[0]["score"] if ranked else None
     top_tied = sum(1 for e in ranked if e["score"] == top_score) if top_score is not None else 0
     return {
         "legal_count": len(legal),
-        "depth": depth,
+        "depth": reached,
+        "depth_requested": depth,
+        "time_limited": time_limited,
         "mates": mates,
         "allows_mate_count": allows_mate_count,
         "top": [

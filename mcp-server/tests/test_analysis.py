@@ -2220,3 +2220,38 @@ def test_shared_tables_do_not_leak_truncated_results():
     shared = analysis._iterative_deepen(full, 2)
     fresh = analysis._iterative_deepen(analysis._Searcher(cshogi.Board(RANK_MOVE86_SFEN), 50_000), 2)
     assert shared[0] == fresh[0]
+
+
+# --- rank_moves の反復深化と時間予算(§38) -------------------------------------
+
+
+def test_rank_moves_reports_depth_and_time_limit_fields():
+    # (c)(d) 十分な時間予算なら要求した深さまで完了し、従来のキーは保たれる。
+    result = analysis.rank_moves(cshogi.Board(RANK_MOVE86_SFEN), depth=3, time_limit=600)
+    assert result["depth"] == 3 and result["depth_requested"] == 3 and result["time_limited"] is False
+    assert {"legal_count", "mates", "allows_mate_count", "top", "top_tied"} <= set(result)
+
+
+def test_rank_moves_time_limit_still_completes_depth_one():
+    # (b) 時間予算が尽きていても深さ1は必ず完了し、time_limitedで通知する。
+    result = analysis.rank_moves(cshogi.Board(RANK_MOVE86_SFEN), depth=4, time_limit=1e-9)
+    assert result["depth"] == 1 and result["time_limited"] is True
+    assert result["top"] and result["top"][0]["score"] is not None
+
+
+def test_rank_moves_depth_one_is_unchanged_by_iterative_structure():
+    # (a) 深さ1の結果は従来実装(各候補を深さ1で読む)と同じ。
+    board = cshogi.Board(RANK_MOVE86_SFEN)
+    result = analysis.rank_moves(board, top_n=30, depth=1)
+    expected = {}
+    tables = analysis._SearchTables()  # 従来実装も候補手間で共有していた
+    for move in board.legal_moves:
+        copy = cshogi.Board(board.sfen())
+        copy.push(move)
+        if copy.is_game_over() or analysis.find_mate(copy, analysis.DEFAULT_MATE_PLY) is not None:
+            continue
+        score, _, completed = analysis._iterative_deepen(analysis._make_searcher(copy, analysis.DEFAULT_NODE_LIMIT, tables), 1)
+        expected[cshogi.move_to_usi(move)] = -score
+    assert result["top"][0]["score"] == max(expected.values())
+    for entry in result["top"]:
+        assert expected[entry["usi"]] == entry["score"]
