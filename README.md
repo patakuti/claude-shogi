@@ -187,6 +187,18 @@ cd mcp-server
 uv run pytest tests/ -v
 ```
 
+### 評価のずれの測定(任意、要エンジン)
+
+`scripts/eval_gap.py`は、静的評価(`analysis.py`)とやねうら王(採点専用)の評価値との平均絶対
+誤差を、段階別・玉が薄い局面・駒得差が大きい局面で集計する。評価に項目を足したとき、ずれが
+縮むかの合否判定に使う(重みの自動調整には使わない)。評価の玉の危険度項(囲い・逃げ道・相手の
+持ち駒、`analysis.EvalWeights`)は実装済みだが、測定で効果が確認できなかったため既定の重みは0。
+
+```bash
+cd mcp-server
+uv run python ../scripts/eval_gap.py
+```
+
 ### 探索の強さの測定(任意、要エンジン)
 
 `scripts/measure_strength.py`は、`samples/`の棋譜でClaudeが指した局面について、`rank_moves`の
