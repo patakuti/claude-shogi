@@ -166,6 +166,9 @@ argument-hint: [difficulty 1-5] [user_side black|white]
        `verify_moves`の候補に含める(合計10手以内)。最終的にそれ以外の手を
        選ぶ場合は、上位手を退けた理由(`verify_moves`のどの項目で劣ったか)を
        `apply_move`の`comment`に1行残す。
+     - `top`の末尾に`bound: true`の手が付くことがある(上位3手より下の手を速く読むため)。
+       その`score`は「この値以下」の境界値で、`material_change`はnull。上位3手と`top_tied`の判断には
+       影響しないので、`bound: true`の手は検証候補に入れるときの参考程度にする。
      - `top_tied`が4以上(序盤など、多数の手が横並び)なら上の強制は外し、
        従来どおり自分の構想で選ぶ。このとき`top`の並びは合法手の生成順に
        すぎないので参考にしない。

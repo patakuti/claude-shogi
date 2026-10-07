@@ -767,7 +767,8 @@ def verify_moves(
 @mcp.tool()
 @_logged("rank_moves")
 def rank_moves(top_n: int = 10, depth: int = RANK_MOVES_DEFAULT_DEPTH,
-               time_limit: float = RANK_MOVES_DEFAULT_TIME_LIMIT) -> dict:
+               time_limit: float = RANK_MOVES_DEFAULT_TIME_LIMIT,
+               exact_n: int = analysis.DEFAULT_EXACT_N) -> dict:
     """全合法手を浅い探索で評価し、上位top_n件を要約して返す(盤面は変更しない)。
 
     Claude思考モード・CSA対局モード用の候補手スクリーニング(§31, §38)。USIエンジンは使わない。
@@ -784,10 +785,15 @@ def rank_moves(top_n: int = 10, depth: int = RANK_MOVES_DEFAULT_DEPTH,
     並びは合法手の生成順にすぎず意味を持たない。
     全候補手を深さ1から順に同じ深さで読み、time_limit秒(既定5秒、[1, 60])を超えたら
     完了した最後の深さの結果を返す。depth: 要求する深さ(既定4、[1, 6])。
-    ネイティブ実装(scripts/build_native.sh)がある場合の実測(§37.4): 深さ4は平均0.67秒・
-    最大約9秒、深さ5は平均2.9秒・最大約76秒。ネイティブ実装がないと数倍〜十数倍遅く、
+    ネイティブ実装(scripts/build_native.sh)がある場合の実測(§42.9、129局面、時間予算60秒):
+    深さ5は平均1.0秒・95%点3.4秒、深さ6は平均4.4秒・95%点20秒(exact_n=3。全幅では
+    深さ5が平均3.5秒、深さ6が平均12.3秒)。ネイティブ実装がないと数倍〜十数倍遅く、
     時間予算内で到達できる深さまでになる(time_limited=trueでdepthが要求より小さい)。
+    depthは候補手を指した後の探索深さで、総読み深さはdepth+1。
     top_n: [1, 30]にクランプ。
+    exact_n(§42.4): 上位exact_n手([1, 10]、既定3)までを正確なスコアで読み、それ以外は
+    「この値以下」の境界値にして速くする。境界値の手にはbound: trueが付き(score=境界の値、
+    material_change=null)、topの末尾に並ぶ。1位の手・スコアとtop_tiedは全幅で読んだ場合と同じ意味。
     """
     with _session_lock:
         session = _current_session()
@@ -799,9 +805,10 @@ def rank_moves(top_n: int = 10, depth: int = RANK_MOVES_DEFAULT_DEPTH,
     top_n = max(1, min(30, top_n))
     depth = max(1, min(6, depth))
     time_limit = max(1.0, min(60.0, float(time_limit)))
+    exact_n = max(1, min(10, exact_n))
     result = analysis.rank_moves(
         board, top_n=top_n, depth=depth, node_limit=RANK_MOVES_NODE_LIMIT,
-        prev_move=prev_move, time_limit=time_limit,
+        prev_move=prev_move, time_limit=time_limit, exact_n=exact_n,
     )
     result["ok"] = True
     return result
