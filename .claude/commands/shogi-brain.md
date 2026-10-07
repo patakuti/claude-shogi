@@ -73,19 +73,19 @@ argument-hint: [difficulty 1-5] [user_side black|white]
 1. `get_state()` と `analyze_position()` で局面を把握する。
 2. **強制事項(この順で確認)**:
    - `mate_for_side_to_move` が見つかっていれば、その`first_move_usi`をそのまま指す(詰み逃し防止)。
-   - `king_safety`を毎手番確認する。`opponent_hand_value`(相手の持ち駒価値の
-     合計=攻撃力の蓄積)が大きいにもかかわらず`own_shelter_count`(自玉に隣接
-     する自分の金・銀の数)が小さい(自玉が薄い)場合は、`material`上で駒得して
-     いても、攻めよりも玉の受け(囲いの立て直し・隣接マスへの利き強化)を
-     優先する。駒得を重ねながら囲いが薄いまま波状攻撃を受けて逆転負けした
-     実例があるため、材料点の優劣だけで安心しない。
-     大きくリードしている局面(`material`差が大きい)ほど評価値は自玉の薄さを
-     反映しない(実戦で+5000の評価から詰まされた実例がある)。`own_shelter_count`
-     が1以下で相手が持ち駒(金銀桂香飛角)を持つときは、攻めを続ける前に
-     `verify_moves`の`own_king_shelter_after`と`allows_mate`で攻め手と受け手を
-     比べ、受けを優先する。なお`rank_moves`の1位手を安全上の理由で覆すときは、
-     覆す根拠(`verify_moves`のどの値が良いか)を`apply_move`の`comment`に必ず書く
-     (根拠なく「安全第一」で1位手を覆した手は、実戦採点で4件とも1位手より悪かった)。
+   - `king_safety`を毎手番確認する。駒得を重ねながら囲いが薄いまま波状攻撃を受けて
+     逆転負けした実例があるため、材料点の優劣だけで安心しない。
+     `king_safety.own_king`(自玉への攻め駒=玉の周囲に利く相手の盤上の駒+相手の
+     持ち駒の金銀桂香飛角、と守り駒=隣接の金銀、の枚数の比較)も毎手番見る。
+     `level`が`danger`(攻め駒が守り駒を2枚以上上回る)なら、`material`で大きくリード
+     していても(評価値は自玉の薄さを反映しない。+5000の評価から詰まされた実例がある)
+     攻めを続ける前に`verify_moves`の`own_king_shelter_after`と`allows_mate`で
+     攻め手と受け手を比べ、受けを優先する。`watch`は注意するが強制はしない。
+     逆に`king_safety.opponent_king.level`が`danger`なら、こちらの攻め駒が相手の守りを
+     上回っているので、寄せの手を優先して`verify_moves`で検証する。
+     なお`rank_moves`の1位手を安全上の理由で覆すときは、覆す根拠(`verify_moves`の
+     どの値が良いか)を`apply_move`の`comment`に必ず書く(根拠なく「安全第一」で
+     1位手を覆した手は、実戦採点で4件とも1位手より悪かった)。
      `king_safety.mating_net_risk`が`true`のとき(相手の飛・角の利き筋が
      自玉の隣接マスに及んでいる)は、王手中でなくても攻めの候補手を選ぶ前に
      `verify_moves`の`mate_ply`を既定より大きく指定して再検証すること

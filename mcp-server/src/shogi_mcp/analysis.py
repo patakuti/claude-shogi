@@ -60,6 +60,9 @@ DEFAULT_MATE_PLY = 5
 # 玉の安全度(§13.5): 玉の隣接マスへの相手の利き1つあたりの点数(材料点スケール)。
 KING_SAFETY_WEIGHT = 40
 
+# 攻守の差(攻め駒-守り駒)がこの値以上なら玉は危険(§41.2)。
+KING_DANGER_BALANCE = 2
+
 
 class EvalWeights(NamedTuple):
     """玉の危険度項の重み(§40.3)。すべて材料点スケール。0にすればその項は評価に影響しない。"""
@@ -319,6 +322,40 @@ def _both_king_dangers(pieces: list[int], black_king: int, white_king: int) -> t
     return by_black, by_white
 
 
+def _king_attackers_on_board(pieces: list[int], attacker_is_white: bool, king_sq: int) -> int:
+    """玉(king_sq)の周囲8マスのいずれかに利きを持つ攻め側の盤上の駒の数(§41.2)。
+
+    利きの本数ではなく駒の数(同じ駒が複数マスに利いても1)。攻め側の玉は数えない。
+    `_both_king_dangers`と同じ前計算表で、駒ごとに利きの有無だけを判定する。
+    """
+    zone = _KING_ZONE_SETS[king_sq]
+    count = 0
+    for sq in compress(_SQUARES, pieces):
+        code = pieces[sq]
+        if (code >= _WHITE_OFFSET) != attacker_is_white or code % _WHITE_OFFSET == cshogi.KING:
+            continue
+        targets = _STEP_TARGETS[code]
+        if targets is not None and not targets[sq].isdisjoint(zone):
+            count += 1
+            continue
+        paths = _RAY_TARGETS[code]
+        if paths is None:
+            continue
+        for path, path_set in paths[sq]:
+            if path_set.isdisjoint(zone):
+                continue
+            for target in path:
+                if target in zone:
+                    count += 1
+                    break
+                if pieces[target]:
+                    break
+            else:
+                continue
+            break
+    return count
+
+
 _SHELTER_PIECE_TYPES = frozenset({
     cshogi.GOLD, cshogi.SILVER,
     cshogi.PROM_PAWN, cshogi.PROM_LANCE, cshogi.PROM_KNIGHT, cshogi.PROM_SILVER,
@@ -367,6 +404,22 @@ def _king_terms(board: cshogi.Board) -> tuple[int, ...]:
         result.append((shelter, open_squares, enemy_hand, enemy_hand * free))
     black, white = result
     return tuple(v for pair in zip(black, white) for v in pair)
+
+
+def _king_attack_defense(pieces: list[int], king_color: int, king_sq: int, attacker_hand) -> dict:
+    """king_colorの玉への攻め駒(盤上+持ち駒の金銀桂香飛角)と守り駒(隣接の金銀)の比較(§41.2)。"""
+    on_board = _king_attackers_on_board(pieces, king_color == cshogi.BLACK, king_sq)
+    in_hand = sum(attacker_hand[1:])  # 歩(先頭)は除く
+    defenders = _king_shelter_count(pieces, king_color, king_sq)
+    balance = on_board + in_hand - defenders
+    return {
+        "attackers_on_board": on_board,
+        "attackers_in_hand": in_hand,
+        "attackers": on_board + in_hand,
+        "defenders": defenders,
+        "balance": balance,
+        "level": "danger" if balance >= KING_DANGER_BALANCE else "watch" if balance >= 1 else "ok",
+    }
 
 
 def _eval_python(board: cshogi.Board, weights: EvalWeights = EVAL_WEIGHTS) -> int:
@@ -1060,10 +1113,14 @@ def analyze(board: cshogi.Board, mate_ply: int = 7, threat_ply: int = DEFAULT_MA
     own_attacked_squares = major_piece_attacked_squares(copy, color=own_color)
     king_zone_names = {square_name(z) for z in _KING_ZONES[copy.king_square(own_color)]}
     mating_net_risk = any(e["square"] in king_zone_names for e in own_attacked_squares)
+    own_hand = hand_black if own_color == cshogi.BLACK else hand_white
+    opp_color = 1 - own_color
     king_safety = {
         "own_shelter_count": _king_shelter_count(copy.pieces, own_color, copy.king_square(own_color)),
         "opponent_hand_value": sum(n * v for n, v in zip(opp_hand, HAND_PIECE_VALUES)),
         "mating_net_risk": mating_net_risk,
+        "own_king": _king_attack_defense(copy.pieces, own_color, copy.king_square(own_color), opp_hand),
+        "opponent_king": _king_attack_defense(copy.pieces, opp_color, copy.king_square(opp_color), own_hand),
     }
 
     return {

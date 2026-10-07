@@ -621,7 +621,8 @@ def test_analyze_king_safety_present_while_in_check():
     board.set_sfen(IN_CHECK_SFEN)
     result = analysis.analyze(board)
     assert result["in_check"]
-    assert result["king_safety"] == {
+    ks = result["king_safety"]
+    assert {k: ks[k] for k in ("own_shelter_count", "opponent_hand_value", "mating_net_risk")} == {
         "own_shelter_count": 0, "opponent_hand_value": 0, "mating_net_risk": True,
     }
 
@@ -2339,3 +2340,59 @@ def test_native_eval_matches_python_with_nonzero_weights(restore_native_weights)
         assert native(board) == analysis._eval_python(board, SAMPLE_WEIGHTS)
         checked += 1
     assert checked > 2000
+
+
+# --- 攻防の駒数比較(§41) -----------------------------------------------------
+
+def _attackers(sfen: str, king_color: int) -> int:
+    board = cshogi.Board(sfen)
+    return analysis._king_attackers_on_board(
+        board.pieces, king_color == cshogi.BLACK, board.king_square(king_color)
+    )
+
+
+def test_king_attackers_counts_pieces_not_attack_lines():
+    # 後手飛1九は先手玉5九の周囲(4九)に利く。1枚と数える(周囲に複数マス利いても1)。
+    assert _attackers("4k4/9/9/9/9/9/9/9/4K3r b - 1", cshogi.BLACK) == 1
+    # 飛が玉の周囲の3マス(6八・5八・4八)を横に貫く配置でも、駒の数としては1。
+    assert _attackers("4k4/9/9/9/9/9/9/8r/4K4 b - 1", cshogi.BLACK) == 1
+
+
+def test_king_attackers_ignores_blocked_and_far_pieces():
+    # 後手飛は自陣の歩で遮られており玉の周囲に利かない。後手香も遠くて利かない。
+    assert _attackers("l3k4/9/9/9/9/9/9/9/4K4 b - 1", cshogi.BLACK) == 0
+    assert _attackers("4k4/9/9/9/9/9/9/9/4K4 b - 1", cshogi.BLACK) == 0
+
+
+def test_king_attackers_excludes_attackers_own_king():
+    # 後手玉が先手玉の隣にいても攻め駒には数えない。
+    assert _attackers("9/9/9/9/9/9/9/4k4/4K4 b - 1", cshogi.BLACK) == 0
+
+
+def test_king_attack_defense_counts_hand_without_pawns_and_levels():
+    # 先手玉5九、守りは金銀2枚。後手は飛・角を持つ(盤上の攻めなし、歩は数えない)。
+    board = cshogi.Board("4k4/9/9/9/9/9/9/4GS3/4K4 b rb3p 1")
+    info = analysis._king_attack_defense(board.pieces, cshogi.BLACK, board.king_square(cshogi.BLACK),
+                                         board.pieces_in_hand[1])
+    assert (info["attackers_on_board"], info["attackers_in_hand"], info["defenders"]) == (0, 2, 2)
+    assert (info["balance"], info["level"]) == (0, "ok")
+    # 守りがなく攻め2枚 → balance 2 で danger、攻め1枚 → watch
+    bare = cshogi.Board("4k4/9/9/9/9/9/9/9/4K4 b rb 1")
+    assert analysis._king_attack_defense(bare.pieces, cshogi.BLACK, bare.king_square(cshogi.BLACK),
+                                         bare.pieces_in_hand[1])["level"] == "danger"
+    one = cshogi.Board("4k4/9/9/9/9/9/9/9/4K4 b r 1")
+    assert analysis._king_attack_defense(one.pieces, cshogi.BLACK, one.king_square(cshogi.BLACK),
+                                         one.pieces_in_hand[1])["level"] == "watch"
+
+
+def test_analyze_position_king_safety_is_symmetric_between_the_two_kings():
+    # 先後・盤を反転した局面では own_king と opponent_king の中身が(手番が入れ替わるので)同じになる。
+    for board in _random_positions(seed=21, games=3):
+        a = analysis.analyze(board)["king_safety"]
+        b = analysis.analyze(_colour_swapped(board))["king_safety"]
+        assert a["own_king"] == b["own_king"] and a["opponent_king"] == b["opponent_king"]
+
+
+def test_analyze_position_king_safety_keeps_existing_keys():
+    ks = analysis.analyze(cshogi.Board())["king_safety"]
+    assert {"own_shelter_count", "opponent_hand_value", "mating_net_risk", "own_king", "opponent_king"} <= set(ks)
