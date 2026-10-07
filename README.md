@@ -199,6 +199,10 @@ cd mcp-server
 uv run python ../scripts/eval_gap.py
 ```
 
+`scripts/king_danger_report.py`は、KIFの各局面で`analyze_position`の`king_safety.own_king`/
+`opponent_king`(玉への攻め駒と守り駒の枚数比較)を一覧する。`--referee`でやねうら王の評価値も
+並べて表示する(表示のみ)。
+
 ### 探索の強さの測定(任意、要エンジン)
 
 `scripts/measure_strength.py`は、`samples/`の棋譜でClaudeが指した局面について、`rank_moves`の

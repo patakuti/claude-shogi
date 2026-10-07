@@ -624,6 +624,12 @@ def analyze_position() -> dict:
     king_safety(§22.4、mating_net_riskは§27.2)は手番側視点の玉の安全度の要約。
     own_shelter_countは自玉に隣接する自分の金・銀(金と同格の成駒を含む)の数、
     opponent_hand_valueは相手の持ち駒の合計価値(既存の駒価値換算)。
+    own_king/opponent_king(§41)は、それぞれ手番側の玉・相手玉への攻守の駒数比較:
+    attackers_on_board(玉の周囲に利きを持つ攻め側の盤上の駒の数)・attackers_in_hand
+    (攻め側の持ち駒の金銀桂香飛角の枚数、歩は除く)・attackers(その合計)・defenders
+    (玉に隣接する自陣の金銀)・balance(attackers-defenders)・level(balance>=2で
+    "danger"、1で"watch"、それ以外"ok")。own_kingがdangerなら受け優先、opponent_king
+    がdangerならこちらの攻めが足りている(寄せの検証を優先)。
     mating_net_riskは、相手の飛・角(成りを含む)の利き筋(major_piece_attacked_
     squaresと同じ判定)が自玉の隣接マスに及んでいるかを示す真偽値。新規の探索・
     判定ロジックは追加せず、既存2機能の組み合わせのみで判定する。静的な利き筋の
