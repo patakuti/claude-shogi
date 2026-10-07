@@ -662,7 +662,8 @@ def verify_moves(
     """候補手(USI表記、最大10件)を機械検証する(盤面は変更しない)。Claude思考モード用。
 
     各候補について、legal(合法か)・is_mate(相手玉が即詰みか)・gives_check(王手か)・
-    allows_mate(指した後に相手から自玉への詰みが生じるか=頓死チェック)・
+    allows_mate(指した後に相手から自玉への詰みが生じるか=頓死チェック。nullは
+    「mate_ply手以内の詰みが見つからなかった」の意味で、チェック未実施ではない)・
     destination(移動先/打ち込み先マスへの相手の利き数opponent_effectsと味方の紐数
     own_supports。opponent_effects>0かつown_supports==0はタダ捨ての警告)・
     own_attacked_after(着手直後の自駒への当たり上位5件。§13.3のattacked_pieces形式。

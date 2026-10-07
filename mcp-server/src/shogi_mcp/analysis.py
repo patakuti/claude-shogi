@@ -11,7 +11,7 @@ from __future__ import annotations
 import time
 from itertools import compress
 from operator import mul
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import cshogi
 from cshogi import KIF
@@ -59,6 +59,19 @@ DEFAULT_MATE_PLY = 5
 
 # 玉の安全度(§13.5): 玉の隣接マスへの相手の利き1つあたりの点数(材料点スケール)。
 KING_SAFETY_WEIGHT = 40
+
+
+class EvalWeights(NamedTuple):
+    """玉の危険度項の重み(§40.3)。すべて材料点スケール。0にすればその項は評価に影響しない。"""
+
+    attack: int = KING_SAFETY_WEIGHT  # 玉の周囲への相手の利き1つ(A項、§13.5)
+    shelter: int = 0  # 玉の周囲の自陣の金銀・同格の成駒1枚(S項)
+    open_squares: int = 0  # 玉の周囲で自駒がなく相手の利きもない逃げ道1マス(E項)
+    hand: int = 0  # 相手が持つ金銀桂香飛角1枚(H項)
+    hand_open: int = 0  # 相手の持ち駒(H)×玉の周囲の自駒がないマス数(HO項)
+
+
+EVAL_WEIGHTS = EvalWeights()
 
 # --- 利き計算(§13.2) --------------------------------------------------------
 # 座標系: sq = (筋-1)*9 + (段-1)。筋方向は±9、段方向(一→九)は+1(実機確認済み)。
@@ -328,14 +341,50 @@ def _king_shelter_count(pieces: list[int], color: int, king_sq: int) -> int:
     return count
 
 
-def _eval_python(board: cshogi.Board) -> int:
-    """材料点差 + 玉の安全度(§13.5)。手番側視点。"""
+def _king_terms(board: cshogi.Board) -> tuple[int, ...]:
+    """玉の危険度項の素点(§40.3)を(S, E, H, HO)×(先手玉, 後手玉)の順で返す。
+
+    S: 玉の周囲の自陣の金銀・同格の成駒の数。E: 玉の周囲で自駒がなく相手の盤上の駒の利きもない
+    マス数。H: 相手の持ち駒の金銀桂香飛角の枚数(歩は除く)。HO: H × 玉の周囲の自駒がないマス数。
+    """
+    pieces = board.pieces
+    hands = board.pieces_in_hand  # (先手, 後手)。種別の並びは歩香桂銀金角飛
+    result = []
+    for color in (cshogi.BLACK, cshogi.WHITE):
+        is_white = color == cshogi.WHITE
+        king_sq = board.king_square(color)
+        shelter = open_squares = free = 0
+        for zone_sq in _KING_ZONES[king_sq]:
+            code = pieces[zone_sq]
+            if code and (code >= _WHITE_OFFSET) == is_white:
+                if code % _WHITE_OFFSET in _SHELTER_PIECE_TYPES:
+                    shelter += 1
+                continue
+            free += 1
+            if not _count_attackers(pieces, not is_white, zone_sq):
+                open_squares += 1
+        enemy_hand = sum(hands[1 - color][1:])
+        result.append((shelter, open_squares, enemy_hand, enemy_hand * free))
+    black, white = result
+    return tuple(v for pair in zip(black, white) for v in pair)
+
+
+def _eval_python(board: cshogi.Board, weights: EvalWeights = EVAL_WEIGHTS) -> int:
+    """材料点差 + 玉の危険度(§13.5, §40)。手番側視点。"""
     pieces = board.pieces
     black, white = _material_of(pieces, board.pieces_in_hand)
     danger_to_white, danger_to_black = _both_king_dangers(
         pieces, board.king_square(cshogi.BLACK), board.king_square(cshogi.WHITE)
     )
-    score = (black - white) + KING_SAFETY_WEIGHT * (danger_to_white - danger_to_black)
+    score = (black - white) + weights.attack * (danger_to_white - danger_to_black)
+    if weights[1:] != (0, 0, 0, 0):
+        s_b, s_w, e_b, e_w, h_b, h_w, ho_b, ho_w = _king_terms(board)
+        score += (
+            weights.shelter * (s_b - s_w)
+            + weights.open_squares * (e_b - e_w)
+            + weights.hand * (h_w - h_b)
+            + weights.hand_open * (ho_w - ho_b)
+        )
     return score if board.turn == cshogi.BLACK else -score
 
 
@@ -345,7 +394,7 @@ _eval_native = native_eval.load(
     _BLACK_VALUE,
     _WHITE_VALUE,
     HAND_PIECE_VALUES,
-    KING_SAFETY_WEIGHT,
+    EVAL_WEIGHTS,
     fallback=_eval_python,
 )
 _eval_for_side_to_move = _eval_native if _eval_native is not None else _eval_python
