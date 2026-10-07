@@ -110,7 +110,7 @@ def test_no_active_game_is_not_logged_and_does_not_fail():
 
 def test_tool_signatures_are_preserved():
     # (e) FastMCPが引数スキーマを作るため、デコレータで引数が変わらないこと。
-    assert list(inspect.signature(server.rank_moves).parameters) == ["top_n", "depth", "time_limit"]
+    assert list(inspect.signature(server.rank_moves).parameters) == ["top_n", "depth", "time_limit", "exact_n"]
     assert list(inspect.signature(server.apply_move).parameters) == [
         "move", "comment", "include_board", "include_legal_moves",
     ]

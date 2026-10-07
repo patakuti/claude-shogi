@@ -557,6 +557,12 @@ def test_rank_moves_clamps_arguments_and_uses_defaults():
         server.rank_moves(top_n=1_000, depth=99, time_limit=1_000)
         assert (captured["top_n"], captured["depth"], captured["time_limit"]) == (30, 6, 60.0)
 
+        assert captured["exact_n"] == 3
+        server.rank_moves(exact_n=0)
+        assert captured["exact_n"] == 1
+        server.rank_moves(exact_n=99)
+        assert captured["exact_n"] == 10
+
 
 def test_rank_moves_reports_reached_depth():
     server.new_game(difficulty=1, user_side="black", mode="brain")

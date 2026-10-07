@@ -2396,3 +2396,75 @@ def test_analyze_position_king_safety_is_symmetric_between_the_two_kings():
 def test_analyze_position_king_safety_keeps_existing_keys():
     ks = analysis.analyze(cshogi.Board())["king_safety"]
     assert {"own_shelter_count", "opponent_hand_value", "mating_net_risk", "own_king", "opponent_king"} <= set(ks)
+
+
+# --- 詰みの打ち切り(§42.3)と上位N手のみ正確に読むrank_moves(§42.4) -------------
+
+# 後手番。4八金打から3手で詰む(実戦局面)。詰みスコアを見つけた後も他の全手の「詰みでないこと」を
+# 証明しようとして、打ち切りがないと深さ5で約66万ノードかかった。
+MATE_IN_THREE_SFEN = "l4k1nl/3g2g2/p5spp/2N1pp3/2sp5/4PPP2/P1+pP1KN1P/1+r4S2/L6RL w 4P2b2gsnp 82"
+
+
+def test_python_search_stops_at_mate_score():
+    searcher = analysis._Searcher(cshogi.Board(MATE_IN_THREE_SFEN), 10_000_000)
+    score, pv = searcher.search(4, -analysis.MATE_SCORE - 1, analysis.MATE_SCORE + 1)
+    assert score == analysis.MATE_SCORE
+    assert pv and pv[0] in list(cshogi.Board(MATE_IN_THREE_SFEN).legal_moves)
+    assert searcher.nodes < 50_000  # 打ち切りなしでは約9万3千ノード
+
+
+@pytest.mark.skipif(analysis._native_search is None, reason="scripts/build_native.sh not run")
+def test_native_search_stops_at_mate_score_and_matches_python():
+    native = analysis._native_search.searcher(
+        cshogi.Board(MATE_IN_THREE_SFEN), 10_000_000, analysis._native_search.new_context(), 0
+    )
+    score, pv = native.search(5, -analysis.MATE_SCORE - 1, analysis.MATE_SCORE + 1)
+    assert score == analysis.MATE_SCORE
+    assert pv and pv[0] in list(cshogi.Board(MATE_IN_THREE_SFEN).legal_moves)
+    assert native.nodes < 400_000  # 打ち切りなしでは約66万ノード
+    python = analysis._Searcher(cshogi.Board(MATE_IN_THREE_SFEN), 10_000_000)
+    p_score, _ = python.search(3, -analysis.MATE_SCORE - 1, analysis.MATE_SCORE + 1)
+    assert p_score == score
+
+
+def _strip(top: list[dict]) -> list[tuple]:
+    return [(e["usi"], e["score"], e["material_change"], e.get("bound", False)) for e in top]
+
+
+def test_rank_moves_exact_n_covering_all_candidates_has_no_bounds():
+    board = cshogi.Board(RANK_MOVE86_SFEN)
+    all_exact = analysis.rank_moves(board, top_n=30, depth=3, exact_n=0)
+    big = analysis.rank_moves(board, top_n=30, depth=3, exact_n=1000)
+    assert _strip(all_exact["top"]) == _strip(big["top"])
+    assert not any("bound" in e for e in all_exact["top"])
+
+
+def test_rank_moves_exact_n_keeps_top_moves_and_marks_bounds():
+    board = cshogi.Board(RANK_MOVE86_SFEN)
+    full = analysis.rank_moves(board, top_n=30, depth=3, exact_n=0)
+    part = analysis.rank_moves(board, top_n=30, depth=3, exact_n=3)
+    assert part["top"][0]["usi"] == full["top"][0]["usi"]
+    assert part["top"][0]["score"] == full["top"][0]["score"]
+    assert part["top_tied"] == full["top_tied"]
+    assert len(part["top"]) == len(full["top"])
+    seen_bound = False
+    for entry in part["top"]:
+        if entry.get("bound"):
+            seen_bound = True
+            assert entry["material_change"] is None
+            assert entry["score"] is not None
+        else:
+            assert not seen_bound  # 正確な手が先、境界値の手は末尾
+            assert "bound" not in entry
+    assert seen_bound
+    exact_scores = [e["score"] for e in part["top"] if not e.get("bound")]
+    bound_scores = [e["score"] for e in part["top"] if e.get("bound")]
+    assert len(exact_scores) >= 3 and exact_scores == sorted(exact_scores, reverse=True)
+    assert max(bound_scores) < min(exact_scores[:3])
+
+
+def test_rank_moves_exact_n_counts_all_ties_with_the_top():
+    # 初期局面は全手が同点。exact_n=3でも同点は全て正確に数える。
+    result = analysis.rank_moves(cshogi.Board(), top_n=30, depth=2, exact_n=3)
+    assert result["top_tied"] == result["legal_count"] == 30
+    assert not any("bound" in e for e in result["top"])

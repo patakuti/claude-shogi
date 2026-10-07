@@ -56,6 +56,8 @@ DEFAULT_SEARCH_DEPTH = 3
 # (候補5手で数秒以内の要件を維持。上限到達時は静的評価へフォールバック)。
 DEFAULT_NODE_LIMIT = 50_000
 DEFAULT_MATE_PLY = 5
+# rank_moves: 正確なスコアで読む上位の手数(それ以外は境界値、§42.4)
+DEFAULT_EXACT_N = 3
 
 # 玉の安全度(§13.5): 玉の隣接マスへの相手の利き1つあたりの点数(材料点スケール)。
 KING_SAFETY_WEIGHT = 40
@@ -999,6 +1001,9 @@ class _Searcher:
                     hist_key = (board.turn, m)
                     self._history[hist_key] = self._history.get(hist_key, 0) + depth * depth
                 break
+            # 詰みスコアを超える手はないので、これ以上読まない(窓の上端が詰みスコアを超える根・PVノード用)。
+            if best_score >= MATE_SCORE:
+                break
 
         if searched == 0:
             # 全ての手が枝刈りされた(futilityのみ。searched>0条件により通常は起きない)。
@@ -1368,6 +1373,7 @@ def rank_moves(
     mate_ply: int = DEFAULT_MATE_PLY,
     prev_move: Optional[int] = None,
     time_limit: Optional[float] = None,
+    exact_n: int = DEFAULT_EXACT_N,
 ) -> dict:
     """全合法手の事前スクリーニング(§31.2, §38.2)。盤面は変更しない。
 
@@ -1382,6 +1388,11 @@ def rank_moves(
     全候補手を深さ1からdepthまで同じ深さで順に読む(反復深化)。time_limit(秒、Noneは無制限)を
     超えたら、完了した最後の深さの結果を返す(深さ1は必ず完了する)。戻り値のdepthは
     実際に完了した深さ、depth_requestedは要求した深さ、time_limitedは時間で打ち切ったか。
+
+    exact_n(§42.4): 深さ2以降の反復で、上位exact_n手までを正確なスコアで読み、それ以外は
+    「この値以下」の境界値にする(窓を狭めて読むので速い)。境界値の手には`bound: True`を付け、
+    material_changeはNone、topの末尾に置く。1位の手・スコアと、1位と同点の手の数(top_tied)は
+    全幅で読んだ場合と同じ意味を保つ(同点の手は窓の内側で正確に読む)。0以下なら全て正確に読む。
     """
     copy = _copy_board(board)
     mover_is_black = copy.turn == cshogi.BLACK
@@ -1404,20 +1415,36 @@ def rank_moves(
         finally:
             copy.pop()
 
-    def evaluate_all(search_depth: int, deadline: Optional[float]) -> Optional[list[dict]]:
-        """全候補を同じ深さで評価する。deadlineを超えたらNone(その深さは使わない)。"""
+    def evaluate_all(
+        search_depth: int, deadline: Optional[float], order: list[tuple[int, dict]]
+    ) -> Optional[list[dict]]:
+        """全候補をorderの順に同じ深さで評価する。deadlineを超えたらNone(その深さは使わない)。
+
+        深さ2以降は、exact_n手の正確なスコアが揃った後、exact_n番目のスコアnthに対して窓
+        alpha=nth-1で読む。alphaを超えれば正確、超えなければ境界値(bound=True)。
+        """
         ranked: list[dict] = []
-        for move, info in candidates:
+        exact_scores: list[int] = []  # 降順
+        for move, info in order:
             if deadline is not None and search_depth > 1 and time.perf_counter() > deadline:
                 return None
             entry = dict(info)
+            alpha = None
+            if exact_n > 0 and search_depth > 1 and len(exact_scores) >= exact_n:
+                alpha = exact_scores[exact_n - 1] - 1
             copy.push(move)
             try:
                 searcher = _make_searcher(copy, node_limit, tables)
-                score, pv = searcher.search(search_depth, -MATE_SCORE - 1, MATE_SCORE + 1)
+                child_beta = MATE_SCORE + 1 if alpha is None else -alpha
+                score, pv = searcher.search(search_depth, -MATE_SCORE - 1, child_beta)
                 if searcher.truncated:
                     entry["score"] = None
                     entry["material_change"] = None
+                elif alpha is not None and -score <= alpha:
+                    # 窓の外(alpha以下): 境界値。PVは信頼できないのでmaterial_changeは求めない。
+                    entry["score"] = -score
+                    entry["material_change"] = None
+                    entry["bound"] = True
                 else:
                     for m in pv:
                         copy.push(m)
@@ -1429,30 +1456,43 @@ def rank_moves(
                         entry["material_change"] = (end_black - end_white) - (base_black - base_white)
                     else:
                         entry["material_change"] = (end_white - end_black) - (base_white - base_black)
+                    exact_scores.append(entry["score"])
+                    exact_scores.sort(reverse=True)
             finally:
                 copy.pop()
-            ranked.append(entry)
+            ranked.append((move, entry))
         return ranked
+
+    def rank_key(item: tuple[int, dict]):
+        entry = item[1]
+        if entry["score"] is None:
+            return (0, 0)
+        return (2 if not entry.get("bound") else 1, entry["score"])
 
     tables = _SearchTables()  # 候補手間・反復間で合流する局面の探索結果を共有する(§35.1)
     started = time.perf_counter()
     deadline = started + time_limit if time_limit is not None else None
-    ranked: list[dict] = []
+    order = list(candidates)  # 前の反復の結果順に並べ替える(正確な手→境界値の手→未完了の手)
+    ranked: list[tuple[int, dict]] = []
     reached = 0
     time_limited = False
     for search_depth in range(1, max(1, depth) + 1):
         if deadline is not None and search_depth > 1 and time.perf_counter() > deadline:
             time_limited = True
             break
-        result = evaluate_all(search_depth, deadline)
+        result = evaluate_all(search_depth, deadline, order)
         if result is None:
             time_limited = True
             break
+        result.sort(key=rank_key, reverse=True)
         ranked, reached = result, search_depth
+        order = [(m, {k: v for k, v in e.items() if k not in ("score", "material_change", "bound")}) for m, e in result]
 
-    ranked.sort(key=lambda e: e["score"] if e["score"] is not None else -MATE_SCORE * 10, reverse=True)
-    top_score = ranked[0]["score"] if ranked else None
-    top_tied = sum(1 for e in ranked if e["score"] == top_score) if top_score is not None else 0
+    entries = [e for _, e in ranked]
+    top_score = entries[0]["score"] if entries and not entries[0].get("bound") else None
+    top_tied = (
+        sum(1 for e in entries if e["score"] == top_score and not e.get("bound")) if top_score is not None else 0
+    )
     return {
         "legal_count": len(legal),
         "depth": reached,
@@ -1461,8 +1501,8 @@ def rank_moves(
         "mates": mates,
         "allows_mate_count": allows_mate_count,
         "top": [
-            {k: e[k] for k in ("usi", "kif", "score", "material_change", "check")}
-            for e in ranked[:top_n]
+            {k: e[k] for k in ("usi", "kif", "score", "material_change", "check", "bound") if k in e}
+            for e in entries[:top_n]
         ],
         "top_tied": top_tied,
     }

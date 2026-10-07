@@ -360,6 +360,9 @@ static int search(Search *s, int depth, int alpha, int beta, int ply, int allow_
             }
             break;
         }
+        /* 詰みスコアを超える手はないので、これ以上読まない(窓の上端が詰みスコアを超える根・PVノード用) */
+        if (best_score >= MATE_SCORE)
+            break;
     }
 
     if (searched == 0) {
