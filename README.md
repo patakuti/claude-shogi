@@ -204,6 +204,11 @@ uv run python ../scripts/eval_gap.py
 `opponent_king`(玉への攻め駒と守り駒の枚数比較)を一覧する。`--referee`でやねうら王の評価値も
 並べて表示する(表示のみ)。
 
+`scripts/knight_outposts_report.py`は、全棋譜(`games/*.kif`)の局面で、`analyze_position`の
+`king_safety.own_knight_outposts`(玉の前に居座る相手の桂と、桂を持つときの打ち込み先)の
+出現率と出た手数を出す。`--list`で局面ごとの一覧。やねうら王は使わない。
+`verify_moves`の`own_knight_outposts_after_pv`は、読み筋の交換の結果で桂が居座る手を見分ける。
+
 ### 探索の強さの測定(任意、要エンジン)
 
 `scripts/measure_strength.py`は、`samples/`の棋譜でClaudeが指した局面について、`rank_moves`の

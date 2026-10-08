@@ -424,6 +424,57 @@ def _king_attack_defense(pieces: list[int], king_color: int, king_sq: int, attac
     }
 
 
+_HAND_KNIGHT = HAND_PIECE_NAMES.index("桂")
+
+
+def knight_outposts(board: cshogi.Board, color: int) -> dict:
+    """colorの玉に対する、相手の桂の居座りと打ち込み先(§43.2)。
+
+    居座り(on_board): 相手の盤上の桂で、colorの駒の利きがなく(取れない)、桂の利き先に玉の範囲
+    (玉のマスと隣8マス)がある(direct)か、次の跳躍先の利き先に玉の範囲がある(next)もの。
+    打ち込み先(drop_squares): 相手が桂を持つとき、桂を打てる空きマスのうち、colorの利きがなく、
+    打った桂の利き先に玉の範囲があるマス。利きは静的(ピン等は考えない)。成桂は含めない。
+    盤面は変更しない。
+    """
+    pieces = board.pieces
+    attacker_color = 1 - color
+    a_white = attacker_color == cshogi.WHITE
+    code = cshogi.KNIGHT + (_WHITE_OFFSET if a_white else 0)
+    targets = _STEP_TARGETS[code]
+    king_sq = board.king_square(color)
+    zone = _KING_ZONE_SETS[king_sq] | {king_sq}
+
+    on_board = []
+    for sq in compress(_SQUARES, [c == code for c in pieces]):
+        if attackers(pieces, color, sq):
+            continue
+        direct = bool(targets[sq] & zone)
+        next_squares = [
+            t
+            for t in sorted(targets[sq])
+            if not (pieces[t] and (pieces[t] >= _WHITE_OFFSET) == a_white) and targets[t] & zone
+        ]
+        if direct or next_squares:
+            on_board.append(
+                {
+                    "square": square_name(sq),
+                    "direct": direct,
+                    "next": [square_name(t) for t in next_squares],
+                    "support": len(attackers(pieces, attacker_color, sq)),
+                }
+            )
+
+    drop_squares = []
+    if board.pieces_in_hand[attacker_color][_HAND_KNIGHT] > 0:
+        for sq in _SQUARES:
+            rank = sq % 9
+            if pieces[sq] or (rank > 6 if a_white else rank < 2):
+                continue
+            if targets[sq] & zone and not attackers(pieces, color, sq):
+                drop_squares.append(square_name(sq))
+    return {"on_board": on_board, "drop_squares": drop_squares}
+
+
 def _eval_python(board: cshogi.Board, weights: EvalWeights = EVAL_WEIGHTS) -> int:
     """材料点差 + 玉の危険度(§13.5, §40)。手番側視点。"""
     pieces = board.pieces
@@ -1126,6 +1177,8 @@ def analyze(board: cshogi.Board, mate_ply: int = 7, threat_ply: int = DEFAULT_MA
         "mating_net_risk": mating_net_risk,
         "own_king": _king_attack_defense(copy.pieces, own_color, copy.king_square(own_color), opp_hand),
         "opponent_king": _king_attack_defense(copy.pieces, opp_color, copy.king_square(opp_color), own_hand),
+        "own_knight_outposts": knight_outposts(copy, own_color),
+        "opponent_knight_outposts": knight_outposts(copy, opp_color),
     }
 
     return {
@@ -1318,6 +1371,7 @@ def verify_moves(
             entry["own_attacked_after_pv"] = None
             entry["mate_threat_after_pv"] = None
             entry["own_trapped_major_pieces_after_pv"] = None
+            entry["own_knight_outposts_after_pv"] = None
         else:
             # PVを適用した局面の実材料点差からmaterial_changeを算出(§13.5)
             for m in pv:
@@ -1339,6 +1393,8 @@ def verify_moves(
             # push_passの自動切り替え(§20.1)により、読み筋の総手数の偶奇(PV終端の手番)に
             # 関わらず呼び出せる。
             entry["own_trapped_major_pieces_after_pv"] = trapped_major_pieces(copy, color=opponent_color)
+            # §43.3: 読み筋終端で、自玉に対して相手の桂が居座っていないか(交換で桂が着地する形の予告)。
+            entry["own_knight_outposts_after_pv"] = knight_outposts(copy, mover_color)["on_board"]
             # §24.3: 読み筋終端で、この手を指した側が何もしなければ相手から詰みがあるか。
             # find_mate_threatはboard.turn側が「何もしなければ」を仮定するため、
             # 読み筋終端でcopy.turn == mover_colorのとき(読み筋の総手数が奇数、
