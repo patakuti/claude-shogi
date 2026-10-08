@@ -83,6 +83,13 @@ argument-hint: [difficulty 1-5] [user_side black|white]
      攻め手と受け手を比べ、受けを優先する。`watch`は注意するが強制はしない。
      逆に`king_safety.opponent_king.level`が`danger`なら、こちらの攻め駒が相手の守りを
      上回っているので、寄せの手を優先して`verify_moves`で検証する。
+   - **桂の居座り**(`king_safety.own_knight_outposts`)も毎手番見る。相手の桂が玉の前に
+     居座る(自分の駒が取れない)と、玉の守りを数手で崩される(前2局とも決め手になった)。
+     `on_board`が空でなければ、(1)その桂を取る手を最優先する。駒損は銀1枚分(500)程度まで
+     許容するが、`allows_mate`が出る手は除く。(2)取れなければ、桂の`next`(次の跳躍先)に
+     利きを足す・埋める手を探す。`drop_squares`が非空(相手が桂を持っている)で他が同点なら、
+     そのマスに利きを足す手を優先する。居座られてから取るのは遅いので、手を決める前に
+     下記`own_knight_outposts_after_pv`で防ぐ。
      なお`rank_moves`の1位手を安全上の理由で覆すときは、覆す根拠(`verify_moves`の
      どの値が良いか)を`apply_move`の`comment`に必ず書く(根拠なく「安全第一」で
      1位手を覆した手は、実戦採点で4件とも1位手より悪かった)。
@@ -240,6 +247,11 @@ argument-hint: [difficulty 1-5] [user_side black|white]
      `own_attacked_after`(着手直後、応手を読む前)には現れない、読み筋の
      途中で自分の駒に新たに生じる当たり(相手の歩打ち→と金前進のような
      手順)を示す。
+     `own_knight_outposts_after_pv`が非空の候補は、`material_change`が良くても警戒する。
+     読み筋の交換(取る・取り返す)の結果、相手の桂が自玉の近くに着地して居座る形を示す
+     (例: 銀を取り返したら▲同桂で4五に桂が着地する)。こうした交換で相手の桂が
+     着地できる局面では、交換しない手(退く手・別の駒で受ける手)を必ず`verify_moves`の
+     候補に含めて比べる(今局58手目は4三銀引が候補になく、同銀で負け筋に入った)。
      `own_trapped_major_pieces_after_pv`が非空の候補は、`own_trapped_major_
      pieces_after`(着手直後)と同様に原則避ける。読み筋(`reply_pv_usi`)の
      途中で自分の飛・角が退路を失う(合駒の後に相手玉が接近する、等)展開を

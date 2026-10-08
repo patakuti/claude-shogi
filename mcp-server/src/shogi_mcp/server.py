@@ -630,6 +630,13 @@ def analyze_position() -> dict:
     (玉に隣接する自陣の金銀)・balance(attackers-defenders)・level(balance>=2で
     "danger"、1で"watch"、それ以外"ok")。own_kingがdangerなら受け優先、opponent_king
     がdangerならこちらの攻めが足りている(寄せの検証を優先)。
+    own_knight_outposts/opponent_knight_outposts(§43)は、それぞれ手番側の玉・相手玉に対する
+    相手の桂の居座り: on_boardは「盤上の桂で、玉側の駒の利きがなく(取れない)、桂の利き先
+    (direct)または次の跳躍先(next)が玉と隣接マスに届くもの」({square, direct, next,
+    support})、drop_squaresは「相手が持つ桂を打てて、玉側の利きがなく、打つと玉の周囲に
+    利くマス」。居座りは玉の守りを数手で崩す。own側が空でなければ、その桂を取る(駒損は
+    銀1枚分程度まで許容)か、次の跳躍先に利きを足す手を優先する。利きは静的でピン等は
+    考えない。
     mating_net_riskは、相手の飛・角(成りを含む)の利き筋(major_piece_attacked_
     squaresと同じ判定)が自玉の隣接マスに及んでいるかを示す真偽値。新規の探索・
     判定ロジックは追加せず、既存2機能の組み合わせのみで判定する。静的な利き筋の
@@ -728,6 +735,13 @@ def verify_moves(
     ことがある(own_trapped_major_pieces_afterと同じ制約)。reply_pv_usiが
     浅い探索の結果である点もmaterial_changeと同じ制約。
     search_depth_completed == 0の場合はnull。is_mateの候補には付けない。
+    own_knight_outposts_after_pv(§43.3): 読み筋(reply_pv_usi)を最後まで適用した局面での、
+    自玉に対する相手の桂の居座り(analyze_positionのking_safety.own_knight_outposts.
+    on_boardと同じ形のリスト、なければ空リスト)。交換(取る・取り返す)の結果、相手の桂が
+    自玉の近くに居座る手を、手を決める前に見分ける(例: 銀を取り返したら▲同桂で桂が着地する
+    手)。非空の候補は、材料点が良くても、交換しない別案(退く手など)を必ず検討する。
+    reply_pv_usiが浅い探索の結果である点はmaterial_changeと同じ制約で、読み筋が交換の先まで
+    届かないと現れない。search_depth_completed == 0の場合はnull。is_mateの候補には付けない。
     mate_threat_after_pv(§24.3): 読み筋を最後まで適用した局面に対する詰めろ
     判定({found, within_ply, first_move_usi}、詰めろなしはnull)。「読み筋の
     最後で自分が何もしなければ、相手から詰みがあるか」の早期警告。非nullの
