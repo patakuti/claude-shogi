@@ -210,7 +210,8 @@ uv run python ../scripts/eval_gap.py
 `verify_moves`の`own_knight_outposts_after_pv`は、読み筋の交換の結果で桂が居座る手を見分ける。
 
 `/shogi-brain`・`/shogi-csa`の思考手順(`.claude/commands/shogi-brain.md`)には「序盤モード」がある
-(40手目まで・駒の交換が起きていない間)。この間は`rank_moves`/`verify_moves`の駒の損得を
+(40手目まで・角交換以外の駒の交換が起きていない間)。角を持ち合う間は、角打ちからの成り込み・両取りの
+警告が出る手を採らない。この間は`rank_moves`/`verify_moves`の駒の損得を
 安全フィルタ(駒損・詰み・各種警告の除外)にだけ使い、歩1枚〜桂程度の差は手を選ぶ理由にしない。
 飛車を筋から離して歩を取る手などは、駒組みの原則(自陣の無防備化・成り込み・囲いの連結)で判断する。
 コードの変更はなく、運用ルールのみ。
